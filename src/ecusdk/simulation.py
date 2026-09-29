@@ -10,12 +10,12 @@ from dataclasses import asdict, dataclass, field
 from enum import Enum
 from typing import Any, TypeAlias
 
-from ecusdk.can import CanBus, CanFrame
+from ecusdk.can import CanBus, CanFilter, CanFrame, VirtualCanBus, VirtualCanNode
 from ecusdk.clock import Clock, RealClock
 from ecusdk.errors import IsoTpError, ObdError
 from ecusdk.isotp import reassemble
 from ecusdk.isotp_transport import IsoTpTransport
-from ecusdk.obd import PID_CODECS, DtcStore, encode_dtc
+from ecusdk.obd import DtcStore, ObdRegistry, encode_dtc
 
 SignalValue: TypeAlias = int | float
 
@@ -87,11 +87,13 @@ class ECU:
     )
     _initial_signals: dict[str, SignalValue] = field(init=False, repr=False)
     _transport: IsoTpTransport = field(init=False, repr=False)
+    obd: ObdRegistry = field(init=False, repr=False)
 
     def __post_init__(self) -> None:
         self.signals = SignalMap(dict(self.signals), self.signal_limits)
         self._initial_signals = dict(self.signals)
         self._transport = IsoTpTransport(self.response_id, self.request_id)
+        self.obd = ObdRegistry(self.signals)
 
     def reset(self) -> None:
         self._transport.reset()
@@ -117,11 +119,7 @@ class ECU:
         mode = request[0]
         pid = request[1] if len(request) > 1 else 0
         if mode == 0x01:
-            codec = next((item for item in PID_CODECS if item.identifier == pid), None)
-            if codec is None:
-                return None
-            value = self.signals.get(codec.source, 0)
-            return bytes((0x41, pid)) + codec.encode(value)
+            return self.obd.encode(pid)
         if mode == 0x03:
             return bytes((0x43,)) + b"".join(
                 encode_dtc(code) for code in self.dtcs.list()
@@ -148,6 +146,21 @@ class ECU:
         except (IsoTpError, ObdError, ValueError, IndexError):
             self._transport.reset()
             return None
+
+    def poll_frames(self) -> list[CanFrame]:
+        """Obtiene envíos ISO-TP habilitados por el reloj, sin nuevos inputs.
+
+        No emite mientras la ECU está offline. Los errores de protocolo o
+        timeout cancelan la transferencia y se traducen en ausencia de frames,
+        igual que en handle_frames.
+        """
+        if not self.online:
+            return []
+        try:
+            return self._transport.poll()
+        except IsoTpError:
+            self._transport.reset()
+            return []
 
     def handle(self, frame: CanFrame) -> CanFrame | None:
         frames = self.handle_frames(frame)
@@ -249,15 +262,50 @@ class Vehicle:
         self.scenario = scenario
         self._offline_until: dict[str, float] = {}
         self._timeout_until: dict[str, float] = {}
-        self._exchange_lock = threading.Lock()
+        self._exchange_lock = threading.RLock()
+        self._virtual_nodes: dict[str, list[tuple[ECU, VirtualCanNode]]] = {}
+        self._protocol_buses: dict[int, str] = {}
+        for bus in self.buses.values():
+            if isinstance(bus, VirtualCanBus):
+                bus.set_clock(self.clock)
+
+    def _connect_virtual_nodes(self) -> None:
+        try:
+            for name, bus in self.buses.items():
+                if not isinstance(bus, VirtualCanBus) or name in self._virtual_nodes:
+                    continue
+                ports: list[tuple[ECU, VirtualCanNode]] = []
+                self._virtual_nodes[name] = ports
+                for ecu in self.ecus:
+                    if ecu.bus is None or ecu.bus == name:
+                        port = bus.connect(
+                            filters=[CanFilter(ecu.request_id, 0x7FF, False)]
+                        )
+                        ports.append((ecu, port))
+        except Exception:
+            self._disconnect_virtual_nodes()
+            raise
+
+    def _disconnect_virtual_nodes(self) -> None:
+        for ports in self._virtual_nodes.values():
+            for _, port in ports:
+                port.close()
+        self._virtual_nodes.clear()
+        self._protocol_buses.clear()
 
     def start(self) -> None:
-        self.state = VehicleState.RUNNING
-        if self.scenario is not None and not self.scenario.started:
-            self.scenario.start(self.clock.now())
+        with self._exchange_lock:
+            self._connect_virtual_nodes()
+            self.state = VehicleState.RUNNING
+            if self.scenario is not None and not self.scenario.started:
+                self.scenario.start(self.clock.now())
 
     def stop(self) -> None:
-        self.state = VehicleState.STOPPED
+        with self._exchange_lock:
+            self.state = VehicleState.STOPPED
+            self._disconnect_virtual_nodes()
+            for ecu in self.ecus:
+                ecu.set_protocol_clock(self.clock)
 
     def pause(self) -> None:
         if self.state is VehicleState.RUNNING:
@@ -282,20 +330,47 @@ class Vehicle:
             self.scenario.reset()
 
     def tick(self) -> None:
-        if self.state is not VehicleState.RUNNING or self.scenario is None:
-            return
-        for event in self.scenario.due(self.clock.now()):
-            ecu = next((item for item in self.ecus if item.name == event.ecu), None)
-            if ecu is None:
-                raise KeyError(f"ECU desconocida: {event.ecu}")
-            if event.action in ("set", "signal"):
-                if event.signal is None or event.value is None:
-                    raise ValueError("evento de señal incompleto")
-                ecu.set_signal(event.signal, event.value)
-            elif event.action in ("offline", "ecu_offline"):
-                self._offline_until[ecu.name] = self.clock.now() + event.duration
-            elif event.action == "timeout":
-                self._timeout_until[ecu.name] = self.clock.now() + event.duration
+        """Avanza escenarios y procesa un frame por nodo ECU y sus timers."""
+        with self._exchange_lock:
+            if self.state is not VehicleState.RUNNING:
+                return
+            if self.scenario is not None:
+                for event in self.scenario.due(self.clock.now()):
+                    ecu = next(
+                        (item for item in self.ecus if item.name == event.ecu), None
+                    )
+                    if ecu is None:
+                        raise KeyError(f"ECU desconocida: {event.ecu}")
+                    if event.action in ("set", "signal"):
+                        if event.signal is None or event.value is None:
+                            raise ValueError("evento de señal incompleto")
+                        ecu.set_signal(event.signal, event.value)
+                    elif event.action in ("offline", "ecu_offline"):
+                        self._offline_until[ecu.name] = (
+                            self.clock.now() + event.duration
+                        )
+                    elif event.action == "timeout":
+                        self._timeout_until[ecu.name] = (
+                            self.clock.now() + event.duration
+                        )
+
+            self._service_virtual_buses()
+
+    def _service_virtual_buses(self) -> None:
+        for bus_name, ports in self._virtual_nodes.items():
+            for ecu, port in ports:
+                frame = port.recv(timeout=0)
+                if not self._can_exchange(
+                    ecu, bus_name
+                ) or self.clock.now() < self._timeout_until.get(ecu.name, -1):
+                    continue
+                if frame is not None:
+                    self._protocol_buses[id(ecu)] = bus_name
+                    for response in ecu.handle_frames(frame) or []:
+                        port.send(response)
+                if self._protocol_buses.get(id(ecu), bus_name) == bus_name:
+                    for response in ecu.poll_frames():
+                        port.send(response)
 
     def inject_timeout(self, ecu: str, duration: float) -> None:
         self._timeout_until[ecu] = self.clock.now() + duration
@@ -322,6 +397,8 @@ class Vehicle:
             raise RuntimeError("el vehículo no está ejecutándose")
         self.tick()
         bus = self.buses[bus_name]
+        if isinstance(bus, VirtualCanBus):
+            return self._virtual_exchange_frames(bus_name, bus, request)
         bus.send(request)
         received = bus.recv(timeout=0)
         if received is None:
@@ -357,6 +434,46 @@ class Vehicle:
                 return result
 
         return []
+
+    def _virtual_exchange_frames(
+        self, bus_name: str, bus: VirtualCanBus, request: CanFrame
+    ) -> list[CanFrame]:
+        target = next(
+            (
+                ecu
+                for ecu in self.ecus
+                if ecu.request_id == request.arbitration_id
+                and not request.is_extended_id
+                and ecu.online
+                and self._can_exchange(ecu, bus_name)
+                and self.clock.now() >= self._timeout_until.get(ecu.name, -1)
+            ),
+            None,
+        )
+        filters = [CanFilter(target.response_id, 0x7FF, False)] if target else []
+        driver = bus.connect(filters=filters)
+        try:
+            driver.send(request)
+            self.tick()
+            if target is None:
+                return []
+            client = IsoTpTransport(
+                target.request_id, target.response_id, clock=self.clock
+            )
+            result: list[CanFrame] = []
+            while True:
+                while (response := driver.recv(timeout=0)) is not None:
+                    result.append(response)
+                    if response.data and response.data[0] >> 4 != 3:
+                        client.receive(response)
+                controls = client.poll()
+                if not controls:
+                    return result
+                for control in controls:
+                    driver.send(control)
+                self.tick()
+        finally:
+            driver.close()
 
     def exchange_isotp(self, bus_name: str, request: CanFrame) -> bytes | None:
         responses = self.exchange_frames(bus_name, request)
