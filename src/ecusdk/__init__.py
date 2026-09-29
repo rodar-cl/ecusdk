@@ -1,6 +1,14 @@
 """ECUSDK: sandbox automotriz programable."""
 
-from ecusdk.can import CanBus, CanFrame, CanIdentifier, SocketCanBus, VirtualCanBus
+from ecusdk.can import (
+    CanBus,
+    CanFilter,
+    CanFrame,
+    CanIdentifier,
+    SocketCanBus,
+    VirtualCanBus,
+    VirtualCanNode,
+)
 from ecusdk.clock import Clock, RealClock, VirtualClock
 from ecusdk.elm327 import (
     Elm327Emulator,
@@ -19,11 +27,12 @@ from ecusdk.errors import (
 )
 from ecusdk.isotp import IsoTpReceiver
 from ecusdk.isotp_transport import IsoTpSender, IsoTpTransport
-from ecusdk.obd import RPM_PID, SPEED_PID, DtcStore, PidCodec
+from ecusdk.obd import RPM_PID, SPEED_PID, DtcStore, ObdRegistry, PidCodec
 from ecusdk.simulation import ECU, Scenario, ScenarioEvent, Vehicle, VehicleState
 
 __all__ = [
     "CanBus",
+    "CanFilter",
     "CanFrame",
     "CanIdentifier",
     "SocketCanBus",
@@ -39,6 +48,7 @@ __all__ = [
     "IsoTpSender",
     "IsoTpTransport",
     "PidCodec",
+    "ObdRegistry",
     "RPM_PID",
     "SPEED_PID",
     "IsoTpTimeoutError",
@@ -53,5 +63,6 @@ __all__ = [
     "Vehicle",
     "VehicleState",
     "VirtualCanBus",
+    "VirtualCanNode",
     "VirtualClock",
 ]

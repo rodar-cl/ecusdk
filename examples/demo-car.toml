@@ -18,3 +18,7 @@ initial = 850
 
 [ecus.ecm.signals.speed]
 initial = 0
+
+[ecus.ecm.obd]
+"01:0C" = "rpm"
+"01:0D" = "speed"
