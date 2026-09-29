@@ -1,0 +1,40 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  quality:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+        python: ["3.11", "3.12", "3.13", "3.14"]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-python@v6
+        with:
+          python-version: ${{ matrix.python }}
+      - uses: astral-sh/setup-uv@v6
+        with:
+          version: latest
+      - run: uv sync --locked
+      - run: uv run ruff format --check .
+      - run: uv run ruff check .
+      - run: uv run pyright
+      - run: uv run pytest --cov=ecusdk --cov-report=term-missing --cov-fail-under=90
+      - run: uv build --out-dir dist-ci
+      - name: Install and verify wheel
+        shell: bash
+        run: |
+          rm -rf .ci-venv
+          uv venv .ci-venv
+          uv pip install --quiet --python .ci-venv dist-ci/*.whl
+          if [ -x .ci-venv/bin/python ]; then PYTHON=.ci-venv/bin/python; CLI=.ci-venv/bin/ecusdk; else PYTHON=.ci-venv/Scripts/python; CLI=.ci-venv/Scripts/ecusdk.exe; fi
+          "$PYTHON" -c "import importlib.metadata, importlib.resources, ecusdk; assert importlib.metadata.version('ecusdk'); assert importlib.resources.files('ecusdk').joinpath('py.typed').is_file(); assert ecusdk.Vehicle and ecusdk.CanFrame"
+          "$CLI" --help
+      - name: SocketCAN checks (Linux)
+        if: runner.os == 'Linux'
+        run: uv run pytest tests/test_socketcan.py
