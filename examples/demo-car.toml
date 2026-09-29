@@ -1,0 +1,20 @@
+[vehicle]
+name = "demo-car"
+vin = "ECUSDK00000000001"
+
+[buses.powertrain]
+type = "can"
+bitrate = 500000
+
+[ecus.ecm]
+bus = "powertrain"
+
+[ecus.ecm.can]
+request_id = 0x7E0
+response_id = 0x7E8
+
+[ecus.ecm.signals.rpm]
+initial = 850
+
+[ecus.ecm.signals.speed]
+initial = 0

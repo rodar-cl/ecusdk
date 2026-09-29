@@ -212,6 +212,11 @@ ECUSDK
 
 ## Estado actual
 
+La fase v0.1 ya incluye CAN virtual y SocketCAN explícito, ISO-TP, OBD-II
+(Mode 01/03/04/09), DTCs, escenarios deterministas y un emulador ELM327 por
+TCP. SocketCAN requiere Linux y una interfaz configurada explícitamente.
+
+
 ECUSDK se encuentra en una etapa temprana de desarrollo.
 
 El primer objetivo es deliberadamente pequeño:
