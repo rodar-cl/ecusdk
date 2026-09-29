@@ -2,20 +2,30 @@
 
 from __future__ import annotations
 
+import importlib
 import os
 import socket
 import threading
-from typing import Protocol
-
-try:
-    import termios
-    import tty
-except ImportError:  # pragma: no cover - only non-POSIX platforms
-    termios = None
-    tty = None
+from collections.abc import Callable
+from typing import Protocol, cast
 
 from ecusdk.can import CanFrame
 from ecusdk.simulation import Vehicle
+
+OpenPty = Callable[[], tuple[int, int]]
+TtyName = Callable[[int], str]
+SetRaw = Callable[[int, int], None]
+
+_openpty = cast(OpenPty | None, getattr(os, "openpty", None))
+_ttyname = cast(TtyName | None, getattr(os, "ttyname", None))
+try:
+    _termios = importlib.import_module("termios")
+    _tty = importlib.import_module("tty")
+    _setraw = cast(SetRaw, getattr(_tty, "setraw"))
+    _tcsa_flush = cast(int, getattr(_termios, "TCSAFLUSH"))
+except (ImportError, AttributeError):  # pragma: no cover - non-POSIX platforms
+    _setraw = None
+    _tcsa_flush = None
 
 
 class ByteTransport(Protocol):
@@ -48,20 +58,25 @@ class PtySerialTransport:
     """Pseudo-terminal transport; unavailable platforms fail explicitly."""
 
     def __init__(self) -> None:
-        if not hasattr(os, "openpty"):
+        if (
+            _openpty is None
+            or _ttyname is None
+            or _setraw is None
+            or _tcsa_flush is None
+        ):
             raise OSError("pseudo-terminal serial is unavailable on this platform")
-        self.master, self.slave = os.openpty()
+        self.master, self.slave = _openpty()
+        self._ttyname = _ttyname
         self._closed = False
         try:
-            if tty is not None and termios is not None:
-                tty.setraw(self.slave, when=termios.TCSAFLUSH)
+            _setraw(self.slave, _tcsa_flush)
         except BaseException:
             self.close()
             raise
 
     @property
     def slave_name(self) -> str:
-        return os.ttyname(self.slave)
+        return self._ttyname(self.slave)
 
     def read(self, size: int = 4096) -> bytes:
         try:

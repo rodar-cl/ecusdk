@@ -43,12 +43,13 @@ def test_external_tcp_client_obd_and_settings() -> None:
 
 
 def test_pty_serial_client_round_trip() -> None:
-    if not hasattr(os, "openpty"):
-        pytest.skip("pseudo-terminal serial is unavailable on this platform")
     vehicle = load_vehicle("examples/demo-car.toml")
     vehicle.start()
-    transport = PtySerialTransport()
-    client = os.open(transport.slave_name, os.O_RDWR | os.O_NOCTTY)
+    try:
+        transport = PtySerialTransport()
+    except OSError:
+        pytest.skip("pseudo-terminal serial is unavailable on this platform")
+    client = os.open(transport.slave_name, os.O_RDWR | getattr(os, "O_NOCTTY", 0))
     thread = threading.Thread(target=Elm327Emulator(vehicle).serve, args=(transport,))
     thread.start()
     try:
