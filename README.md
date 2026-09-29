@@ -1,56 +1,68 @@
+<div align="center">
+
 # ECUSDK
 
-**Una sandbox automotriz programable para probar CAN, OBD-II y diagnóstico vehicular sin necesitar un auto físico.**
+### Un banco de pruebas virtual para software automotriz
 
-> ECUSDK está en desarrollo activo. Las APIs, formatos de configuración y arquitectura interna pueden cambiar significativamente antes de la primera versión estable.
+Simula ECUs y conversa con ellas usando CAN, ISO-TP y OBD-II, sin depender de un vehículo físico.
 
-ECUSDK es un toolkit source-available para crear vehículos virtuales compuestos por ECUs programables.
+**Creado por Rodar · Hecho para compartir con la comunidad**
 
-El proyecto nace inicialmente como entorno de pruebas para [Rodar](https://rodar.cl), permitiendo que software automotriz interactúe con ECUs simuladas usando los mismos protocolos que utilizaría contra un vehículo real.
+[![Python 3.11+](https://img.shields.io/badge/Python-3.11%2B-3776AB?logo=python&logoColor=white)](https://www.python.org/)
+[![Estado: experimental](https://img.shields.io/badge/estado-experimental-orange)](#estado-del-proyecto)
+[![Licencia: PolyForm Noncommercial](https://img.shields.io/badge/licencia-PolyForm_Noncommercial_1.0.0-6f42c1)](./LICENSE)
 
-La idea no es hacer mocks de APIs de aplicación, sino simular la capa de comunicación automotriz.
+</div>
 
-```text
-Aplicación
-     │
-     │ OBD / UDS
-     ▼
- ELM327 virtual
-     │
-     │ CAN / ISO-TP
-     ▼
-┌─────────────────────┐
-│       ECUSDK        │
-│                     │
-│  ECM   ABS   TCM    │
-│   │     │     │     │
-│   └── CAN virtual ──┘
-└─────────────────────┘
+ECUSDK es una herramienta interna de Rodar que ponemos a disposición de la comunidad para construir y probar software automotriz en un entorno controlado. Define un vehículo virtual con señales y ECUs configurables, y prueba el intercambio de diagnóstico a través de protocolos vehiculares.
+
+La meta es simular lo que una aplicación puede observar en la comunicación con el vehículo: ECUSDK no ejecuta firmware original ni intenta reproducir el hardware interno de una ECU.
+
+## Cómo funciona
+
+Una aplicación puede consultar el vehículo simulado por OBD-II. La petición viaja por ISO-TP y CAN hasta la ECU virtual, que responde según su configuración y estado actual.
+
+```mermaid
+flowchart LR
+    APP[Aplicación de diagnóstico] -->|OBD-II| ELM[Emulador ELM327<br/>TCP]
+    ELM -->|solicitud / respuesta| ISOTP[ISO-TP]
+    ISOTP --> CAN[Bus CAN virtual]
+    CAN --> ECU[ECU virtual]
+    ECU -->|señales · DTC · VIN| STATE[Estado configurable]
+    STATE --> ECU
 ```
 
-## Objetivo
+El mismo núcleo permite trabajar directamente con buses virtuales desde Python o conectar una interfaz SocketCAN explícita en Linux.
 
-ECUSDK busca hacer que las pruebas de software automotriz sean reproducibles, programables e independientes de vehículos físicos.
+## Empieza en un minuto
 
-El proyecto está pensado para soportar:
+Necesitas Python 3.11 o posterior. Desde el repositorio, instala ECUSDK en modo editable:
 
-- ECUs virtuales
-- redes CAN virtuales
-- múltiples ECUs por vehículo
-- OBD-II
-- ISO-TP
-- UDS
-- simulación de DTCs
-- señales vehiculares programables
-- inyección de fallas
-- reproducción de escenarios
-- SocketCAN / `vcan`
-- interfaces ELM327 virtuales
-- testing automatizado y entornos CI
+```bash
+python -m pip install -e .
+```
 
-## Ejemplo
+Consulta las RPM definidas en el ejemplo incluido:
 
-La definición de un vehículo virtual debería verse aproximadamente así:
+```bash
+ecusdk run examples/demo-car.toml --request "01 0C"
+```
+
+La salida contiene la respuesta ISO-TP en hexadecimal (`04 41 0C 0D 48`; los primeros cuatro bytes de payload son la respuesta OBD-II y representan 850 rpm). Para iniciar el servidor ELM327 sobre TCP en `127.0.0.1:35000`:
+
+```bash
+ecusdk run examples/demo-car.toml
+```
+
+La aplicación cliente debe enviar comandos ELM327 terminados en retorno de carro (`\r`). También puedes ejecutar una consulta de una sola vez sin iniciar el servidor:
+
+```bash
+ecusdk run examples/demo-car.toml --request "01 0D"
+```
+
+## Configura un vehículo
+
+El formato TOML describe el bus, las ECUs, sus señales iniciales y la asociación entre PIDs OBD-II y señales. Este fragmento corresponde a [`examples/demo-car.toml`](./examples/demo-car.toml):
 
 ```toml
 [vehicle]
@@ -79,239 +91,56 @@ initial = 0
 "01:0D" = "speed"
 ```
 
-Luego:
+La señal `rpm` alimenta el PID `01 0C`; al cambiar el estado de la ECU, la respuesta refleja el nuevo valor. Puedes definir varios buses y ECUs en un mismo vehículo.
 
-```bash
-ecusdk run examples/demo-car.toml
+## Qué incluye
+
+| Área | Disponible hoy |
+| --- | --- |
+| CAN | Bus virtual con nodos, filtros y timestamps; SocketCAN en Linux mediante interfaz explícita |
+| ISO-TP | Direccionamiento normal, envío segmentado, Flow Control, bloques, STmin y timeouts |
+| OBD-II | Mode 01 para RPM/velocidad; Mode 03 para leer DTCs; Mode 04 para borrarlos; Mode 09 PID 02 para VIN |
+| Simulación | Estado y señales por ECU, reloj virtual y escenarios deterministas desde la API Python |
+| Adaptador | Emulador ELM327 sobre TCP; transporte pseudo-terminal disponible en plataformas compatibles |
+| Herramientas | API Python tipada y CLI `ecusdk run` |
+
+Para conocer los detalles de los protocolos, límites y ejemplos de la API, consulta la [guía de protocolos](./docs/protocols.md).
+
+## Casos de uso
+
+- Desarrollar una integración de diagnóstico antes de tener acceso a un vehículo.
+- Reproducir consultas y respuestas de forma determinista durante el desarrollo.
+- Probar lectura y borrado de DTCs, señales y datos de identificación del vehículo.
+- Conectar clientes compatibles con ELM327 a un emulador por TCP.
+- Usar un bus virtual en pruebas automatizadas o conectar SocketCAN en Linux cuando haga falta.
+
+## Alcance y estado
+
+ECUSDK se encuentra en una etapa experimental (`0.1.0.dev0`). Las interfaces y la configuración pueden evolucionar. La implementación actual cubre un núcleo funcional de CAN, ISO-TP, OBD-II y simulación; las capacidades de UDS más amplio, CAN FD, importación DBC, grabación y reproducción todavía forman parte de ideas futuras.
+
+El simulador modela comportamientos observables del protocolo. No emula firmware de fabricantes, un runtime AUTOSAR completo ni los componentes electrónicos de una ECU. SocketCAN requiere Linux y una interfaz preparada por quien ejecuta la herramienta.
+
+```mermaid
+flowchart LR
+    NOW[Hoy<br/>CAN · ISO-TP · OBD-II<br/>ECUs y ELM327 TCP] --> NEXT[Por explorar<br/>UDS más amplio · CAN FD<br/>DBC · grabación y replay]
 ```
 
-Una aplicación externa podría conectarse a ECUSDK y enviar solicitudes de diagnóstico estándar como:
+## Contribuye
 
-```text
-01 0C
-```
+ECUSDK se comparte para que más personas puedan experimentar, reportar problemas y aportar mejoras. Puedes abrir un issue para describir un caso de uso o enviar una pull request con cambios acotados y una explicación de cómo reproducirlos.
 
-ECUSDK respondería usando el estado actual de la ECU virtual.
+Son especialmente útiles los ejemplos pequeños, las correcciones de protocolo y los perfiles de vehículos ficticios o genéricos. Evita incluir datos identificables de vehículos o información propietaria.
 
-## ¿Por qué ECUSDK?
+## Uso responsable
 
-Probar software automotriz contra vehículos físicos tiene varias limitaciones.
-
-Los vehículos son costosos de conseguir, distintas marcas exponen comportamientos diferentes, muchas fallas son difíciles de reproducir deliberadamente y ciertas condiciones no pueden provocarse de manera segura.
-
-Además, un vehículo físico no puede formar parte de un pipeline normal de integración continua.
-
-ECUSDK permite describir de manera determinista el estado que necesita una prueba.
-
-Por ejemplo:
-
-```yaml
-scenario:
-  name: overheating
-
-timeline:
-  - at: 0s
-    set:
-      rpm: 850
-      coolant: 85
-
-  - at: 20s
-    ramp:
-      coolant:
-        to: 125
-        duration: 40s
-
-  - at: 45s
-    dtc:
-      ecu: ecm
-      add: P0217
-
-  - at: 60s
-    fault:
-      ecu: ecm
-      type: timeout
-```
-
-Esto permite reproducir condiciones como sobrecalentamiento, sensores fuera de rango, timeouts, ECUs desconectadas o errores de comunicación.
-
-## Alcance
-
-ECUSDK es principalmente un simulador de comportamiento de ECUs.
-
-Su objetivo es reproducir lo que software externo puede observar a través de protocolos vehiculares.
-
-No busca inicialmente emular el hardware interno exacto de una ECU Bosch, Continental, Denso u otro fabricante.
-
-Tampoco ejecuta firmware OEM.
-
-```text
-ECUSDK
-
-comportamiento ECU
-CAN
-ISO-TP
-OBD-II
-UDS
-DTCs
-señales
-fallas
-
-✓ dentro del alcance
-```
-
-```text
-emulación de CPU
-firmware OEM
-runtime AUTOSAR completo
-implementaciones propietarias específicas
-
-✗ fuera del alcance inicial
-```
-
-## Arquitectura prevista
-
-```text
-ECUSDK
-│
-├── core
-│   ├── Vehicle
-│   ├── ECU
-│   ├── State
-│   └── VirtualClock
-│
-├── bus
-│   ├── VirtualCAN
-│   └── SocketCAN
-│
-├── protocols
-│   ├── OBD-II
-│   ├── ISO-TP
-│   └── UDS
-│
-├── simulation
-│   ├── Signals
-│   ├── Scenarios
-│   └── Faults
-│
-├── adapters
-│   ├── ELM327
-│   ├── TCP
-│   └── Serial
-│
-└── recording
-    ├── Capture
-    └── Replay
-```
-
-## Estado actual
-
-La fase v0.1 ya incluye CAN virtual y SocketCAN explícito, ISO-TP, OBD-II
-(Mode 01/03/04/09), DTCs, escenarios deterministas y un emulador ELM327 por
-TCP. SocketCAN requiere Linux y una interfaz configurada explícitamente.
-
-La base de protocolos incluye nodos CAN independientes con broadcast, filtros
-y timestamps, transporte ISO-TP con Flow Control, bloques, STmin y timeouts,
-y codecs PID registrados por ECU con señales configurables vía API/TOML. Consulta la
-[guía de protocolos](docs/protocols.md) para API, ejemplos y alcance.
-
-
-ECUSDK se encuentra en una etapa temprana de desarrollo.
-
-El primer objetivo es deliberadamente pequeño:
-
-```text
-CAN virtual
-      ↓
-ECM virtual
-      ↓
-OBD-II Mode 01
-      ↓
-PID 0C
-      ↓
-respuesta RPM
-```
-
-La primera versión útil debería permitir:
-
-```bash
-ecusdk run demo-car
-```
-
-y exponer una ECU virtual capaz de responder consultas OBD-II básicas.
-
-## Roadmap
-
-### v0.1
-
-- Vehicle runtime
-- ECU runtime
-- CAN virtual
-- SocketCAN
-- Linux `vcan`
-- ISO-TP
-- OBD-II Modes 01, 03, 04 y 09
-- señales
-- DTCs
-- scenario engine
-- fault injection básico
-- ELM327 vía TCP / serial
-- CLI
-- ejecución headless
-
-### v0.2
-
-- soporte UDS más amplio
-- importación DBC
-- CAN FD
-- recording
-- replay
-- mejores herramientas de inspección
-
-### Más adelante
-
-- múltiples buses
-- gateways
-- simulación de carga
-- arbitraje CAN más preciso
-- Bluetooth
-- DoIP
-- J1939
-- perfiles comunitarios de ECUs
-
-## Seguridad
-
-ECUSDK está diseñado principalmente para desarrollo, simulación y testing.
-
-Por defecto no debería enviar tráfico hacia interfaces CAN físicas.
-
-El uso de hardware real debe requerir configuración explícita.
-
-No utilices ECUSDK para enviar tráfico arbitrario a sistemas críticos de seguridad dentro de un vehículo operativo.
-
-## Contribuir
-
-ECUSDK está actualmente en una fase experimental.
-
-Se aceptarán issues, correcciones de protocolo, tests, perfiles vehiculares y contribuciones de implementación a medida que la arquitectura central se estabilice.
-
-Más adelante se añadirá una guía formal de contribución.
+El entorno virtual está orientado a desarrollo, aprendizaje y pruebas. El bus predeterminado es virtual. SocketCAN abre únicamente la interfaz configurada de forma explícita. Al trabajar con hardware, hazlo en un banco de pruebas seguro y autorizado; no conectes pruebas experimentales a un vehículo en circulación.
 
 ## Licencia
 
-ECUSDK se distribuye bajo la **PolyForm Noncommercial License 1.0.0**.
+ECUSDK se distribuye bajo **PolyForm Noncommercial License 1.0.0**. La licencia permite los usos no comerciales definidos en sus términos; el uso comercial requiere una licencia independiente de Rodar. Lee el texto completo en [`LICENSE`](./LICENSE).
 
-Puedes usar, estudiar, modificar y redistribuir ECUSDK para los usos no comerciales permitidos por esa licencia.
+## Rodar
 
-El uso comercial no está autorizado por la licencia pública.
-
-Las organizaciones que quieran utilizar ECUSDK con fines comerciales deberán obtener una licencia comercial independiente.
-
-Consulta [`LICENSE`](./LICENSE).
-
-## Proyecto
-
-ECUSDK es desarrollado por Rodar.
-
-https://rodar.cl
+ECUSDK es desarrollado por [Rodar](https://rodar.cl) y se comparte con la comunidad como herramienta para aprender, experimentar y construir mejor software automotriz.
 
 © 2026 Rodar
