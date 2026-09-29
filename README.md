@@ -216,6 +216,10 @@ La fase v0.1 ya incluye CAN virtual y SocketCAN explícito, ISO-TP, OBD-II
 (Mode 01/03/04/09), DTCs, escenarios deterministas y un emulador ELM327 por
 TCP. SocketCAN requiere Linux y una interfaz configurada explícitamente.
 
+La base de protocolos incluye transporte ISO-TP con Flow Control, bloques,
+STmin y timeouts, y codecs PID independientes. Consulta la
+[guía de protocolos](docs/protocols.md) para API, ejemplos y alcance.
+
 
 ECUSDK se encuentra en una etapa temprana de desarrollo.
 
