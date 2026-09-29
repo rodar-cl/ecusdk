@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import math
+from collections.abc import MutableMapping
 from dataclasses import dataclass, field
+from typing import cast
 
 from ecusdk.errors import ObdError
 
@@ -113,3 +115,77 @@ class PidCodec:
 RPM_PID = PidCodec(0x0C, 2, "rpm", 0, 16383.75, 4, "rpm")
 SPEED_PID = PidCodec(0x0D, 1, "km/h", 0, 255, 1, "speed")
 PID_CODECS = (RPM_PID, SPEED_PID)
+
+
+class ObdRegistry:
+    """Definiciones y asignaciones de PID Mode 01 propias de una ECU.
+
+    Los codecs inmutables pueden compartirse. Las asignaciones son locales y
+    el mapa de señales se conserva por referencia para reflejar sus cambios.
+    """
+
+    def __init__(self, signals: MutableMapping[str, int | float]) -> None:
+        self._signals = signals
+        self._codecs: dict[int, PidCodec] = {
+            codec.identifier: codec for codec in PID_CODECS
+        }
+        self._bindings: dict[int, str] = {
+            codec.identifier: codec.source for codec in PID_CODECS
+        }
+        self._defaults: set[int] = set(self._bindings)
+
+    def register(self, codec: PidCodec, *, replace: bool = False) -> None:
+        """Registra un codec; los duplicados requieren ``replace=True``."""
+        if not isinstance(cast(object, codec), PidCodec):
+            raise TypeError("codec debe ser PidCodec")
+        if codec.identifier in self._codecs and not replace:
+            raise ObdError(f"ya existe codec para PID {codec.identifier:02X}")
+        prior_source = self._bindings.get(codec.identifier)
+        prior_default = codec.identifier in self._defaults
+        if (
+            prior_source is not None
+            and prior_source not in self._signals
+            and not prior_default
+        ):
+            raise ObdError(
+                f"señal desconocida para PID {codec.identifier:02X}: {prior_source}"
+            )
+        self._codecs[codec.identifier] = codec
+        if prior_source is not None:
+            self._bindings[codec.identifier] = prior_source
+        else:
+            self._bindings.pop(codec.identifier, None)
+        if prior_default:
+            self._defaults.add(codec.identifier)
+        else:
+            self._defaults.discard(codec.identifier)
+
+    def pid(self, identifier: int, *, source: str) -> PidCodec:
+        """Asigna un PID registrado a una señal existente y devuelve su codec."""
+        if type(identifier) is not int or not 0 <= identifier <= 0xFF:
+            raise ValueError("el PID debe ser un byte")
+        codec = self._codecs.get(identifier)
+        if codec is None:
+            raise ObdError(f"PID desconocido: {identifier:02X}")
+        if type(source) is not str or not source:
+            raise ValueError("source debe ser un nombre de señal no vacío")
+        if source not in self._signals:
+            raise ObdError(f"señal desconocida para PID {identifier:02X}: {source}")
+        self._bindings[identifier] = source
+        self._defaults.discard(identifier)
+        return codec
+
+    def encode(self, identifier: int) -> bytes | None:
+        """Devuelve los bytes de respuesta Mode 01 para un PID asignado."""
+        codec = self._codecs.get(identifier)
+        source = self._bindings.get(identifier)
+        if codec is None or source is None:
+            return None
+        if source not in self._signals:
+            if identifier in self._defaults:
+                value = 0
+            else:
+                raise ObdError(f"señal desconocida para PID {identifier:02X}: {source}")
+        else:
+            value = self._signals[source]
+        return bytes((0x41, identifier)) + codec.encode(value)

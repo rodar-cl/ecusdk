@@ -24,8 +24,13 @@ class BrokenSocket:
         pass
 
 
-def test_socketcan_wraps_adapter_errors() -> None:
-    with pytest.raises(AdapterError):
+def test_socketcan_wraps_adapter_errors(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Exercise bind/cleanup failures even on hosts without SocketCAN constants.
+    import ecusdk.can as can
+
+    monkeypatch.setattr(can.socket, "AF_CAN", 29, raising=False)
+    monkeypatch.setattr(can.socket, "CAN_RAW", 1, raising=False)
+    with pytest.raises(AdapterError, match="no se pudo abrir SocketCAN"):
         SocketCanBus(
             "can0",
             socket_factory=lambda _family, _kind, _protocol: BrokenSocket(),

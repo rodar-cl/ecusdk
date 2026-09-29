@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Añadidos nodos CAN independientes con broadcast, filtros por ID/máscara,
+  timestamps de Clock y cierre explícito; Vehicle usa nodos para cada ECU
+  y conserva las transacciones OBD/ISO-TP completas.
+- Añadido registro de PIDs por ECU con asociaciones de señales vía API y
+  TOML, registro de codecs personalizados y validación de configuraciones.
+
 - Completado el transporte ISO-TP con CTS/WAIT/OVERFLOW, block size, STmin,
   timeouts y reloj inyectable; las respuestas largas de ECU esperan Flow Control.
 - Corregido el reensamblado de payloads con padding y la validación de CF

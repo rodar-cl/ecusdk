@@ -6,6 +6,63 @@ extended/mixed addressing ISO-TP en esta fase. Un ID CAN de 29 bits se seleccion
 con `is_extended_id=True`; esto es independiente del modo de direccionamiento
 ISO-TP.
 
+## Nodos CAN virtuales
+
+`VirtualCanBus` distribuye cada envío a las colas independientes de sus nodos.
+Un consumidor lento o un monitor no consume los frames de otros nodos. Se
+conectan con `connect()` y cumplen `CanBus` mediante `send()`/`recv()`.
+Por defecto el emisor no recibe su propio envío; `receive_own_messages=True`
+habilita ese eco.
+
+```python
+from ecusdk import CanFilter, CanFrame, VirtualCanBus, VirtualClock
+
+clock = VirtualClock(10)
+bus = VirtualCanBus(clock=clock)
+tester = bus.connect()
+ecu = bus.connect(filters=[CanFilter(0x7E0, 0x7FF, False)])
+monitor = bus.connect()
+tester.send(CanFrame(0x7E0, bytes.fromhex("02 01 0C")))
+assert ecu.recv(timeout=0).timestamp == 10
+assert monitor.recv(timeout=0).timestamp == 10
+assert tester.recv(timeout=0) is None
+```
+
+Los filtros combinan ID y máscara con `(frame_id & mask) == (filter_id & mask)`.
+`is_extended_id=False` selecciona IDs estándar; `True`, extendidos; `None`, ambos.
+Varios filtros se combinan con OR y una lista vacía acepta todos los frames.
+`set_filters()` afecta a entregas futuras; los frames ya encolados permanecen.
+
+El bus asigna un único timestamp a cada envío sin timestamp usando su `Clock`;
+conserva los timestamps explícitos. Sin reloj se conserva la compatibilidad
+anterior y no se asignan timestamps. `Vehicle` proporciona su propio reloj a
+los buses virtuales. `VirtualClock` permite reproducir la misma secuencia de
+frames y tiempos sin sleeps.
+
+`bus.send()`/`bus.recv()` mantienen la interfaz anterior con loopback; esa cola
+es también un observador de envíos hechos por los nodos. Los consumidores
+independientes deben utilizar nodos. Las colas no tienen límite en esta fase;
+el propietario de cada monitor debe consumir su tráfico.
+
+`node.close()` desconecta el nodo; usarlo cerrado produce `AdapterError` y
+los lectores bloqueados se despiertan. `bus.close()` cierra todos sus nodos;
+`bus.reset()` abre una nueva cola y desconecta los nodos anteriores, que
+permanecen cerrados. Otros nodos se conectan explícitamente después del reset.
+
+Al iniciar un vehículo se crea un nodo por ECU y bus asignado, filtrado por su
+ID de solicitud. `tick()` procesa un frame de entrada por nodo ECU y los envíos ISO-TP
+habilitados por el reloj; para entradas en cola se llama repetidamente. Los nodos externos pueden enviar consultas y observar respuestas
+llamando a `vehicle.tick()`; no necesitan competir con una cola del runtime.
+`exchange_frames()` sigue ofreciendo una transacción completa: usa un nodo
+cliente temporal y envía CTS sobre el bus. Si varias ECUs comparten un ID de
+solicitud, todas reciben el frame; la API de transacción devuelve la respuesta
+de la primera ECU disponible en la lista del vehículo. Un monitor puede ver
+las demás respuestas. Las conversaciones con las mismas direcciones deben
+serializarse por el llamador: el lock del vehículo ordena sus transacciones,
+pero no coordina emisores externos. `stop()` y `reset()` desconectan sólo los nodos del
+vehículo y cancelan transferencias pendientes; `start()` los recrea para
+evitar reproducir solicitudes antiguas.
+
 ## ISO-TP programable
 
 `IsoTpTransport` combina codecs, máquinas RX/TX y timers basados en `Clock`.
@@ -86,7 +143,44 @@ que también es `ValueError` para preservar la captura de validaciones existente
 RPM cuantiza en pasos de 0,25 rpm; velocidad en pasos de 1 km/h. `PidCodec`
 permite definir otros codecs numéricos con escala positiva y rango no negativo
 cuyos extremos sean representables con esa escala;
-añadir uno no lo registra automáticamente en la ECU.
+cada ECU mantiene su propio `ObdRegistry`. Las definiciones pueden
+compartirse, pero el registro y las asociaciones de señales quedan aislados.
+Los registros integrados de RPM y velocidad mantienen la compatibilidad:
+sin una señal del nombre predeterminado responden cero. Una asociación
+explícita siempre exige que la señal exista.
+
+```python
+from ecusdk import ECU, PidCodec
+
+engine = ECU("ECM", 0x7E0, 0x7E8, {"engine_rpm": 850, "fuel": 50})
+engine.obd.pid(0x0C, source="engine_rpm")
+assert engine.obd_payload(bytes.fromhex("01 0C")) == bytes.fromhex("41 0C 0D 48")
+
+# Codec de ejemplo para un perfil ficticio, no un PID estándar del catálogo.
+engine.obd.register(PidCodec(0xE1, 1, "%", 0, 100, 1, "fuel"))
+engine.obd.pid(0xE1, source="fuel")
+assert engine.obd_payload(bytes.fromhex("01 E1")) == bytes.fromhex("41 E1 32")
+```
+
+`register(codec)` añade una definición sin asociarla automáticamente a una
+señal. Duplicados producen `ObdError`; `replace=True` permite reemplazar una
+definición conservando su asociación previa. `pid(identifier, source=...)`
+asocia o reasocia una definición registrada y devuelve su codec. Las respuestas
+usan el valor actual de la señal; resetear el vehículo conserva la asociación.
+Un PID no registrado o todavía sin asociación devuelve `None`.
+
+La configuración TOML acepta los PIDs integrados y sus fuentes:
+
+```toml
+[ecus.ecm.obd]
+"01:0C" = "engine_rpm"
+"01:0D" = "speed"
+```
+
+Fuentes inexistentes, claves malformadas, modos/PIDs desconocidos y claves
+que repiten el mismo PID con distintas mayúsculas producen un error de
+configuración. El catálogo se amplía mediante `register()` en Python; TOML
+no define codecs personalizados en esta fase.
 
 La base OBD incluye Mode 01 PIDs 0C/0D, Mode 03 (leer DTCs), Mode 04 (limpiar)
 y Mode 09 PID 02 (VIN de 17 caracteres desde TOML). `DtcStore` mantiene los
