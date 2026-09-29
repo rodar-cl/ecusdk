@@ -3,6 +3,8 @@
 from pathlib import Path
 
 import pytest
+from hypothesis import given
+from hypothesis import strategies as st
 
 import ecusdk.can as can
 from ecusdk import AdapterError, CanFrame, SocketCanBus
@@ -75,3 +77,22 @@ def test_socketcan_requires_explicit_physical_configuration(tmp_path: Path) -> N
     )
     with pytest.raises(ValueError, match="physical"):
         load_vehicle(path)
+
+
+@given(st.booleans(), st.integers(0, 0x1FFFFFFF), st.binary(max_size=8))
+def test_can_wire_codec_property(extended: bool, identifier: int, data: bytes) -> None:
+    identifier &= 0x1FFFFFFF if extended else 0x7FF
+    frame = CanFrame(identifier, data, is_extended_id=extended)
+    assert SocketCanBus._unpack(SocketCanBus._pack(frame)) == frame
+
+
+def test_socketcan_rejects_invalid_dlc_and_missing_capabilities(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    raw = bytearray(SocketCanBus._pack(CanFrame(1, b"x")))
+    raw[4] = 9
+    with pytest.raises(AdapterError, match="DLC"):
+        SocketCanBus._unpack(bytes(raw))
+    monkeypatch.setattr(can.socket, "AF_CAN", None, raising=False)
+    with pytest.raises(AdapterError, match="plataforma"):
+        SocketCanBus("can0", socket_factory=lambda a, b, c: FakeSocket())
