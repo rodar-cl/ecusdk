@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass, field
 
 from ecusdk.errors import ObdError
@@ -58,3 +59,57 @@ def obd_request(mode: int, pid: int = 0) -> bytes:
     if not 0 <= mode <= 0xFF or not 0 <= pid <= 0xFF:
         raise ObdError("mode y pid deben ser bytes")
     return bytes((mode, pid))
+
+
+@dataclass(frozen=True, slots=True)
+class PidCodec:
+    """Codec PID numérico inmutable; encode/decode usan sólo bytes del valor.
+
+    Valores no finitos, fuera de rango o datos de longitud inválida producen
+    ObdError. La cuantización redondea a la unidad codificada más cercana.
+    """
+
+    identifier: int
+    length: int
+    unit: str
+    minimum: float
+    maximum: float
+    scale: float
+    source: str
+
+    def __post_init__(self) -> None:
+        if (
+            not 0 <= self.identifier <= 255
+            or self.length <= 0
+            or not all(
+                math.isfinite(v) for v in (self.minimum, self.maximum, self.scale)
+            )
+            or self.scale <= 0
+            or self.minimum < 0
+            or self.minimum > self.maximum
+            or not math.isfinite(self.maximum * self.scale)
+            or self.minimum * self.scale != round(self.minimum * self.scale)
+            or self.maximum * self.scale != round(self.maximum * self.scale)
+            or round(self.maximum * self.scale) >= 1 << (8 * self.length)
+        ):
+            raise ObdError("definición de codec PID inválida")
+
+    def encode(self, value: int | float) -> bytes:
+        """Codifica un valor físico en sus bytes OBD."""
+        if not math.isfinite(value) or not self.minimum <= value <= self.maximum:
+            raise ObdError(f"valor fuera de rango para PID {self.identifier:02X}")
+        return round(value * self.scale).to_bytes(self.length, "big")
+
+    def decode(self, data: bytes) -> float:
+        """Decodifica los bytes de valor; valida longitud y rango."""
+        if len(data) != self.length:
+            raise ObdError("longitud de datos PID inválida")
+        value = int.from_bytes(data, "big") / self.scale
+        if not self.minimum <= value <= self.maximum:
+            raise ObdError("valor PID fuera de rango")
+        return value
+
+
+RPM_PID = PidCodec(0x0C, 2, "rpm", 0, 16383.75, 4, "rpm")
+SPEED_PID = PidCodec(0x0D, 1, "km/h", 0, 255, 1, "speed")
+PID_CODECS = (RPM_PID, SPEED_PID)

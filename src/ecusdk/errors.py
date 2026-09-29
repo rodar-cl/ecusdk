@@ -21,5 +21,5 @@ class IsoTpTimeoutError(IsoTpError, TimeoutError):
     """Se agotó un timeout de ISO-TP."""
 
 
-class ObdError(ProtocolError):
+class ObdError(ProtocolError, ValueError):
     """Error de OBD-II."""
