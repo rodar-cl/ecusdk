@@ -52,44 +52,37 @@ El proyecto está pensado para soportar:
 
 La definición de un vehículo virtual debería verse aproximadamente así:
 
-```yaml
-vehicle:
-  name: demo-car
-  vin: ECUSDK00000000001
+```toml
+[vehicle]
+name = "demo-car"
+vin = "ECUSDK00000000001"
 
-buses:
-  powertrain:
-    type: can
-    bitrate: 500000
+[buses.powertrain]
+type = "can"
+bitrate = 500000
 
-ecus:
-  ecm:
-    bus: powertrain
+[ecus.ecm]
+bus = "powertrain"
 
-    can:
-      request_id: 0x7E0
-      response_id: 0x7E8
+[ecus.ecm.can]
+request_id = 0x7E0
+response_id = 0x7E8
 
-    signals:
-      rpm:
-        initial: 850
+[ecus.ecm.signals.rpm]
+initial = 850
 
-      speed:
-        initial: 0
+[ecus.ecm.signals.speed]
+initial = 0
 
-      coolant:
-        initial: 88
-
-    obd:
-      "01:0C": rpm
-      "01:0D": speed
-      "01:05": coolant
+[ecus.ecm.obd]
+"01:0C" = "rpm"
+"01:0D" = "speed"
 ```
 
 Luego:
 
 ```bash
-ecusdk run demo-car.yaml
+ecusdk run examples/demo-car.toml
 ```
 
 Una aplicación externa podría conectarse a ECUSDK y enviar solicitudes de diagnóstico estándar como:
@@ -216,8 +209,9 @@ La fase v0.1 ya incluye CAN virtual y SocketCAN explícito, ISO-TP, OBD-II
 (Mode 01/03/04/09), DTCs, escenarios deterministas y un emulador ELM327 por
 TCP. SocketCAN requiere Linux y una interfaz configurada explícitamente.
 
-La base de protocolos incluye transporte ISO-TP con Flow Control, bloques,
-STmin y timeouts, y codecs PID independientes. Consulta la
+La base de protocolos incluye nodos CAN independientes con broadcast, filtros
+y timestamps, transporte ISO-TP con Flow Control, bloques, STmin y timeouts,
+y codecs PID registrados por ECU con señales configurables vía API/TOML. Consulta la
 [guía de protocolos](docs/protocols.md) para API, ejemplos y alcance.
 
 
