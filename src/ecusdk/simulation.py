@@ -12,9 +12,10 @@ from typing import Any, TypeAlias
 
 from ecusdk.can import CanBus, CanFrame
 from ecusdk.clock import Clock, RealClock
-from ecusdk.errors import IsoTpError
-from ecusdk.isotp import IsoTpReceiver, reassemble, segment
-from ecusdk.obd import DtcStore, encode_dtc
+from ecusdk.errors import IsoTpError, ObdError
+from ecusdk.isotp import reassemble
+from ecusdk.isotp_transport import IsoTpTransport
+from ecusdk.obd import PID_CODECS, DtcStore, encode_dtc
 
 SignalValue: TypeAlias = int | float
 
@@ -85,16 +86,21 @@ class ECU:
         default_factory=lambda: dict[str, tuple[float | None, float | None]]()
     )
     _initial_signals: dict[str, SignalValue] = field(init=False, repr=False)
-    _request_receiver: IsoTpReceiver = field(init=False, repr=False)
+    _transport: IsoTpTransport = field(init=False, repr=False)
 
     def __post_init__(self) -> None:
         self.signals = SignalMap(dict(self.signals), self.signal_limits)
         self._initial_signals = dict(self.signals)
-        self._request_receiver = IsoTpReceiver()
+        self._transport = IsoTpTransport(self.response_id, self.request_id)
 
     def reset(self) -> None:
+        self._transport.reset()
         for name, value in self._initial_signals.items():
             self.signals[name] = value
+
+    def set_protocol_clock(self, clock: Clock) -> None:
+        """Asigna el reloj de transporte y cancela transferencias pendientes."""
+        self._transport = IsoTpTransport(self.response_id, self.request_id, clock=clock)
 
     def get_signal(self, name: str) -> SignalValue:
         try:
@@ -110,17 +116,12 @@ class ECU:
             return None
         mode = request[0]
         pid = request[1] if len(request) > 1 else 0
-        if mode == 0x01 and pid == 0x0C:
-            rpm = float(self.get_signal("rpm") if "rpm" in self.signals else 0)
-            if not 0 <= rpm <= 16383.75:
-                raise ValueError("rpm debe estar entre 0 y 16383.75")
-            encoded = round(rpm * 4)
-            return bytes((0x41, 0x0C, encoded >> 8, encoded & 0xFF))
-        if mode == 0x01 and pid == 0x0D:
-            speed = self.get_signal("speed") if "speed" in self.signals else 0
-            if not 0 <= speed <= 255:
-                raise ValueError("speed debe estar entre 0 y 255")
-            return bytes((0x41, 0x0D, round(speed)))
+        if mode == 0x01:
+            codec = next((item for item in PID_CODECS if item.identifier == pid), None)
+            if codec is None:
+                return None
+            value = self.signals.get(codec.source, 0)
+            return bytes((0x41, pid)) + codec.encode(value)
         if mode == 0x03:
             return bytes((0x43,)) + b"".join(
                 encode_dtc(code) for code in self.dtcs.list()
@@ -138,19 +139,15 @@ class ECU:
         if not self.online or frame.arbitration_id != self.request_id:
             return None
         try:
-            payload = self._request_receiver.push(frame)
-        except (IsoTpError, ValueError, IndexError):
-            self._request_receiver = IsoTpReceiver()
+            payload = self._transport.receive(frame)
+            if payload is not None:
+                response_payload = self.obd_payload(payload)
+                if response_payload is not None:
+                    self._transport.send(response_payload)
+            return self._transport.poll()
+        except (IsoTpError, ObdError, ValueError, IndexError):
+            self._transport.reset()
             return None
-        if payload is None:
-            return []
-        try:
-            response_payload = self.obd_payload(payload)
-        except (ValueError, IndexError):
-            return None
-        if response_payload is None:
-            return None
-        return segment(response_payload, self.response_id)
 
     def handle(self, frame: CanFrame) -> CanFrame | None:
         frames = self.handle_frames(frame)
@@ -247,6 +244,8 @@ class Vehicle:
         self.name, self.buses, self.ecus = name, buses, ecus
         self.clock = clock or RealClock()
         self.state = VehicleState.STOPPED
+        for ecu in self.ecus:
+            ecu.set_protocol_clock(self.clock)
         self.scenario = scenario
         self._offline_until: dict[str, float] = {}
         self._timeout_until: dict[str, float] = {}
@@ -336,13 +335,27 @@ class Vehicle:
                 continue
             responses = ecu.handle_frames(received)
             if responses is not None:
-                for response in responses:
-                    bus.send(response)
-                return [
-                    response
-                    for _ in responses
-                    if (response := bus.recv(timeout=0)) is not None
-                ]
+                # Preserve the complete-response convenience API. The client
+                # explicitly acknowledges FF/blocks through FC on the bus.
+                client = IsoTpTransport(
+                    ecu.request_id, ecu.response_id, clock=self.clock
+                )
+                result: list[CanFrame] = []
+                while responses:
+                    for response in responses:
+                        bus.send(response)
+                    responses = list[CanFrame]()
+                    while (response := bus.recv(timeout=0)) is not None:
+                        result.append(response)
+                        if response.data and response.data[0] >> 4 != 3:
+                            client.receive(response)
+                    for control in client.poll():
+                        bus.send(control)
+                        received_control = bus.recv(timeout=0)
+                        if received_control is not None:
+                            responses.extend(ecu.handle_frames(received_control) or [])
+                return result
+
         return []
 
     def exchange_isotp(self, bus_name: str, request: CanFrame) -> bytes | None:

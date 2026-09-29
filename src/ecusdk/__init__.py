@@ -18,7 +18,8 @@ from ecusdk.errors import (
     ProtocolError,
 )
 from ecusdk.isotp import IsoTpReceiver
-from ecusdk.obd import DtcStore
+from ecusdk.isotp_transport import IsoTpSender, IsoTpTransport
+from ecusdk.obd import RPM_PID, SPEED_PID, DtcStore, PidCodec
 from ecusdk.simulation import ECU, Scenario, ScenarioEvent, Vehicle, VehicleState
 
 __all__ = [
@@ -35,6 +36,11 @@ __all__ = [
     "ECUSDKError",
     "IsoTpError",
     "IsoTpReceiver",
+    "IsoTpSender",
+    "IsoTpTransport",
+    "PidCodec",
+    "RPM_PID",
+    "SPEED_PID",
     "IsoTpTimeoutError",
     "ObdError",
     "ProtocolError",
