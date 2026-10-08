@@ -1,16 +1,23 @@
 <div align="center">
 
-# ECUSDK
+<img src="./docs/assets/hero.svg" alt="ECUSDK: ECUs virtuales conectadas a un bus CAN" width="100%">
 
-### Un banco de pruebas virtual para software automotriz
+<br>
 
 Simula ECUs y conversa con ellas usando CAN, ISO-TP y OBD-II, sin depender de un vehículo físico.
 
 **Creado por Rodar · Hecho para compartir con la comunidad**
 
-[![Python 3.11+](https://img.shields.io/badge/Python-3.11%2B-3776AB?logo=python&logoColor=white)](https://www.python.org/)
-[![Estado: experimental](https://img.shields.io/badge/estado-experimental-orange)](#estado-del-proyecto)
-[![Licencia: PolyForm Noncommercial](https://img.shields.io/badge/licencia-PolyForm_Noncommercial_1.0.0-6f42c1)](./LICENSE)
+[![CI](https://github.com/rodar-cl/ecusdk/actions/workflows/ci.yml/badge.svg)](https://github.com/rodar-cl/ecusdk/actions/workflows/ci.yml)
+[![Python 3.11–3.14](https://img.shields.io/badge/Python-3.11_%E2%80%93_3.14-3776AB?logo=python&logoColor=white)](https://www.python.org/)
+[![Tests: 125](https://img.shields.io/badge/tests-125_passing-2ea44f)](#métricas)
+[![Cobertura: 95%](https://img.shields.io/badge/cobertura-95%25-2ea44f)](#métricas)
+[![Pyright strict](https://img.shields.io/badge/pyright-strict-1f6feb)](./pyproject.toml)
+[![Dependencias: 0](https://img.shields.io/badge/dependencias-0-brightgreen)](./pyproject.toml)
+[![Estado: experimental](https://img.shields.io/badge/estado-experimental-orange)](#alcance-y-estado)
+[![Licencia: PolyForm Noncommercial](https://img.shields.io/badge/licencia-PolyForm_NC_1.0.0-6f42c1)](./LICENSE)
+
+[Empieza](#empieza-en-un-minuto) · [Métricas](#métricas) · [Rendimiento](#rendimiento) · [Configuración](#configura-un-vehículo) · [Protocolos](./docs/protocols.md)
 
 </div>
 
@@ -33,6 +40,10 @@ flowchart LR
 ```
 
 El mismo núcleo permite trabajar directamente con buses virtuales desde Python o conectar una interfaz SocketCAN explícita en Linux.
+
+<p align="center">
+  <img src="./docs/assets/terminal.svg" alt="Sesión de terminal: consulta de RPM por CLI y sesión ELM327 por TCP leyendo RPM y VIN" width="820">
+</p>
 
 ## Empieza en un minuto
 
@@ -59,6 +70,56 @@ La aplicación cliente debe enviar comandos ELM327 terminados en retorno de carr
 ```bash
 ecusdk run examples/demo-car.toml --request "01 0D"
 ```
+
+## Métricas
+
+Medido sobre `main` con `uv run pytest --cov=ecusdk`.
+
+| | |
+| --- | --- |
+| 🧪 Tests | **125** pasando en **1.7 s** (incluye pruebas de propiedades con Hypothesis) |
+| 📈 Cobertura | **95 %** de líneas; CI exige ≥ 90 % |
+| 🧩 Código | ~1.900 líneas en `src/` · ~1.600 líneas de tests |
+| 📦 Dependencias de runtime | **0**, sólo biblioteca estándar |
+| ⚡ Import | ~10 ms (`python -X importtime -c "import ecusdk"`) |
+| 🔒 Tipado | Pyright en modo `strict` sobre `src` y `tests` |
+| 🖥️ Matriz de CI | 3 sistemas × 4 versiones de Python = **12 jobs** por cambio |
+
+<details>
+<summary>Cobertura por módulo</summary>
+
+| Módulo | Sentencias | Cobertura |
+| --- | ---: | ---: |
+| `isotp_transport.py` | 149 | 100 % |
+| `clock.py` · `errors.py` · `__init__.py` | 31 | 100 % |
+| `isotp.py` | 121 | 99 % |
+| `can.py` | 225 | 98 % |
+| `obd.py` | 107 | 98 % |
+| `config.py` | 56 | 96 % |
+| `simulation.py` | 338 | 95 % |
+| `elm327.py` | 157 | 88 % |
+| `cli.py` | 39 | 74 % |
+| **Total** | **1.223** | **95 %** |
+
+</details>
+
+Cada pull request pasa por formato y lint (Ruff), Pyright, tests con cobertura, build del wheel e instalación limpia en Linux, macOS y Windows con Python 3.11, 3.12, 3.13 y 3.14. En Linux se ejecutan además las pruebas de SocketCAN.
+
+## Rendimiento
+
+Todo ocurre en memoria y sin `sleep`: el reloj virtual hace que los timeouts y el STmin de ISO-TP se prueben al instante.
+
+| Operación | p50 | p99 | Equivale a |
+| --- | ---: | ---: | --- |
+| Consulta OBD `01 0C` (RPM, un frame) | 15 µs | 49 µs | ~68.000 consultas/s |
+| Consulta OBD `09 02` (VIN, multi-frame + Flow Control) | 32 µs | 102 µs | ~31.000 consultas/s |
+| Transferencia ISO-TP de 4095 B (586 frames) | 0,65 ms | 0,69 ms | ~6,3 MB/s |
+| Ida y vuelta ELM327 por TCP (`010C`) | 42 µs | 122 µs | ~24.000 comandos/s |
+| CLI `ecusdk run --request "01 0C"` en frío | 33 ms | 37 ms | proceso completo |
+
+Como referencia, un bus CAN real a 500 kbit/s transporta del orden de 4.000 frames por segundo: el simulador va muy por delante del hardware que imita.
+
+> Apple M4, macOS, Python 3.12. Los números varían según la máquina; reprodúcelos con `uv run python examples/bench.py`.
 
 ## Configura un vehículo
 
@@ -123,6 +184,15 @@ El simulador modela comportamientos observables del protocolo. No emula firmware
 ```mermaid
 flowchart LR
     NOW[Hoy<br/>CAN · ISO-TP · OBD-II<br/>ECUs y ELM327 TCP] --> NEXT[Por explorar<br/>UDS más amplio · CAN FD<br/>DBC · grabación y replay]
+```
+
+## Desarrollo
+
+```bash
+uv sync                     # entorno con dependencias de desarrollo
+uv run pytest --cov=ecusdk  # tests y cobertura
+uv run ruff check . && uv run pyright
+uv run python examples/bench.py
 ```
 
 ## Contribuye
