@@ -5,6 +5,7 @@ y anótalo en el CHANGELOG.
 """
 
 import inspect
+import sys
 import time
 from collections.abc import Callable
 from dataclasses import fields
@@ -163,5 +164,7 @@ def test_twenty_ecus_sustain_thousands_of_frames_per_second() -> None:
     for index in range(2000):
         frames += 1 + len(vehicle.exchange_frames("can", requests[index % 20]))
     rate = frames / (time.perf_counter() - started)
-    # ~22.000 frames/s en un M4; el umbral deja margen para runners de CI.
-    assert rate > 2000, f"{rate:.0f} frames/s"
+    # ~22.000 frames/s en un M4. La medición de cobertura lo frena ~10x, así
+    # que con ella sólo se exige un mínimo; Windows en CI corre sin cobertura.
+    minimum = 200 if "coverage" in sys.modules else 2000
+    assert rate > minimum, f"{rate:.0f} frames/s"
