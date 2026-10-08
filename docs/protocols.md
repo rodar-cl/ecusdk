@@ -222,8 +222,8 @@ defecto:
 ```python
 from ecusdk import DidSignal
 
-ecu.uds.did(0xF18C, "SN-0001")                         # texto ASCII
-ecu.uds.did(0x0100, b"\x01\x02")                       # bytes
+ecu.uds.did(0xF18C, "SN-0001")  # texto ASCII
+ecu.uds.did(0x0100, b"\x01\x02")  # bytes
 ecu.uds.did(0x0101, DidSignal("rpm", length=2, scale=4))  # desde una señal
 ```
 
