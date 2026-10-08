@@ -90,7 +90,12 @@ pip install 'ecusdk[tui]'
 ecusdk tui                       # opcional: ecusdk tui mi-auto.toml
 ```
 
-Lista los vehículos de `./examples` y `~/.ecusdk/vehicles` con una vista previa, y permite crear, duplicar, borrar y editar cualquier tabla o valor del TOML como un árbol. Al guardar, el archivo se valida con `load_vehicle` y sólo se escribe si es válido. Antes de lanzar eliges host, puertos, BLE y grabación `.eculog`; luego ves la salida de `ecusdk run`, el `inspect` en vivo y una línea para enviar comandos del shell de control.
+Es un asistente en cuatro pasos:
+
+1. **Auto**: elige uno de `./examples` o `~/.ecusdk/vehicles`, o crea uno nuevo. *Personalizar* cambia el nombre, el VIN y los valores iniciales, y agrega o quita sensores del catálogo OBD-II. El *modo avanzado* edita todo el TOML. Antes de guardar, todo se valida con `load_vehicle`.
+2. **Conexión**: Wi-Fi/TCP o Bluetooth (BLE), si aceptas conexiones desde otros dispositivos de tu red y si grabas la sesión en `.eculog`. Los puertos están en *Opciones avanzadas*.
+3. **Iniciar**: muestra un resumen con la dirección a la que debe conectarse tu app.
+4. **En marcha**: sensores en vivo con su valor editable, botones para simular check engine, desconexión o latencia de un módulo, pausa y reinicio, y un registro técnico con el shell de control.
 
 ### Adaptador BLE (opcional)
 

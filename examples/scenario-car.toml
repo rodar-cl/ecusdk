@@ -1,6 +1,3 @@
-# Vehículo con dos ECUs, señales generadas y un escenario con fallos.
-# uv run ecusdk run examples/scenario-car.toml
-
 [vehicle]
 name = "scenario-car"
 vin = "ECUSDK00000000002"
@@ -14,14 +11,20 @@ bitrate = 500000
 bus = "powertrain"
 
 [ecus.ecm.can]
-request_id = 0x7E0
-response_id = 0x7E8
+request_id = 2016
+response_id = 2024
 
 [ecus.ecm.signals.rpm]
 initial = 850
 min = 0
 max = 7000
-generator = { type = "ramp", start = 850, end = 3000, duration = 10, at = 5 }
+
+[ecus.ecm.signals.rpm.generator]
+type = "ramp"
+start = 850
+end = 3000
+duration = 10
+at = 5
 
 [ecus.ecm.signals.speed]
 initial = 0
@@ -30,11 +33,21 @@ initial = 0
 initial = 20
 min = -40
 max = 215
-generator = { type = "ramp", start = 20, end = 90, duration = 120 }
+
+[ecus.ecm.signals.coolant_temperature.generator]
+type = "ramp"
+start = 20
+end = 90
+duration = 120
 
 [ecus.ecm.signals.battery_voltage]
 initial = 14.1
-generator = { type = "random", minimum = 13.8, maximum = 14.4, seed = 1 }
+
+[ecus.ecm.signals.battery_voltage.generator]
+type = "random"
+minimum = 13.8
+maximum = 14.4
+seed = 1
 
 [ecus.ecm.obd]
 "01:05" = "coolant_temperature"
@@ -43,19 +56,28 @@ generator = { type = "random", minimum = 13.8, maximum = 14.4, seed = 1 }
 "01:42" = "battery_voltage"
 
 [ecus.ecm.uds.dids]
-"0xF18C" = "ECM-SN-0001"
-"0x0101" = { signal = "rpm", length = 2, scale = 4 }
+0xF18C = "ECM-SN-0001"
+
+[ecus.ecm.uds.dids.0x0101]
+signal = "rpm"
+length = 2
+scale = 4
 
 [ecus.tcm]
 bus = "powertrain"
 
 [ecus.tcm.can]
-request_id = 0x7E1
-response_id = 0x7E9
+request_id = 2017
+response_id = 2025
 
 [ecus.tcm.signals.speed]
 initial = 0
-generator = { type = "sine", offset = 60, amplitude = 20, period = 30 }
+
+[ecus.tcm.signals.speed.generator]
+type = "sine"
+offset = 60
+amplitude = 20
+period = 30
 
 [ecus.tcm.obd]
 "01:0D" = "speed"

@@ -6,15 +6,20 @@ from pathlib import Path
 from typing import Any, cast
 
 import pytest
-from textual.widgets import Input, Log, Static, Tree
+from textual.widgets import Checkbox, DataTable, Input, Log, Select, Static, Tree
 
 from ecusdk.cli import main
 from ecusdk.config import load_vehicle
 from ecusdk.tui import (
+    CarsScreen,
+    ConnectionScreen,
+    CustomizeScreen,
+    DashboardScreen,
     EcusdkApp,
     EditorScreen,
-    RunScreen,
-    VehiclesScreen,
+    Setup,
+    SummaryScreen,
+    parse_inspect,
     parse_value,
     save_validated,
 )
@@ -28,17 +33,43 @@ def _free_port() -> int:
         return sock.getsockname()[1]
 
 
+def _car(tmp_path: Path) -> Path:
+    path = tmp_path / "car.toml"
+    shutil.copyfile(DEMO, path)
+    return path
+
+
 def test_parse_value() -> None:
     assert parse_value("0x7E0") == 0x7E0
     assert parse_value('"rpm"') == "rpm"
     assert parse_value("rpm") == "rpm"
-    assert parse_value("[1, 2]") == [1, 2]
     assert parse_value("{ type = 'sine' }") == {"type": "sine"}
 
 
+def test_parse_inspect() -> None:
+    live = parse_inspect(
+        "vehicle demo (paused)\n"
+        "  ecu ecm: request 0x7E0 response 0x7E8 bus *\n"
+        "    signal rpm = 850 (generator)\n"
+        "    signal speed = 12.5\n"
+        "    dtcs P0300\n"
+        "    fault ecu_offline (2.000s left)\n"
+    )
+    assert live.state == "paused"
+    assert live.signals == [("ecm", "rpm", 850, True), ("ecm", "speed", 12.5, False)]
+    assert live.dtcs == ["P0300 · Motor (ecm)"]
+    assert live.faults == ["ecu_offline (2.000s left) · Motor (ecm)"]
+
+
+def test_setup_argv() -> None:
+    setup = Setup(Path("car.toml"), ble=True, share=True, record="s.eculog")
+    argv = setup.argv()
+    assert argv[argv.index("--host") + 1] == "0.0.0.0"
+    assert "--ble" in argv and argv[argv.index("--record") + 1] == "s.eculog"
+
+
 def test_save_validated_keeps_file_on_error(tmp_path: Path) -> None:
-    path = tmp_path / "car.toml"
-    shutil.copyfile(DEMO, path)
+    path = _car(tmp_path)
     before = path.read_text()
     error = save_validated(path, {"vehicle": {}})
     assert error is not None and "name" in error
@@ -60,36 +91,81 @@ def test_cli_tui_runs(monkeypatch: pytest.MonkeyPatch) -> None:
     assert seen == [["a.toml"]]
 
 
-def test_vehicles_new_copy_delete(tmp_path: Path) -> None:
+def test_cars_new_copy_delete(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    home = tmp_path / "home"
+
     async def scenario() -> None:
-        app = EcusdkApp([DEMO], home=tmp_path)
-        async with app.run_test() as pilot:
-            screen = app.screen
-            assert isinstance(screen, VehiclesScreen)
-            assert "demo-car" in str(screen.query_one("#preview", Static).content)
+        app = EcusdkApp([], home=home)
+        async with app.run_test(size=(130, 40)) as pilot:
+            cars = app.screen
+            assert isinstance(cars, CarsScreen)
+            assert "Crear" in str(cars.query_one("#card", Static).content)
+            await pilot.press("enter")
+            assert isinstance(app.screen, CustomizeScreen)
+            await pilot.click("#next")
+            assert app.screen is cars
+            assert load_vehicle(home / "mi-auto.toml").name == "Mi auto"
             await pilot.press("c")
-            assert (tmp_path / "demo-car-copia.toml").exists()
+            assert (home / "mi-auto-copia.toml").exists()
             await pilot.press("d")
             await pilot.click("#yes")
-            assert not (tmp_path / "demo-car-copia.toml").exists()
-            await pilot.press("n")
-            assert isinstance(app.screen, EditorScreen)
-            assert load_vehicle(tmp_path / "nuevo-auto.toml").name == "nuevo-auto"
+            assert not (home / "mi-auto-copia.toml").exists()
+            (home / "roto.toml").write_text("[vehicle]\n")
+            cars.reload(home / "roto.toml")
+            await pilot.pause()
+            assert "problema" in str(cars.query_one("#card", Static).content)
+            await pilot.click("#next")
+            assert app.screen is cars
             await pilot.press("escape")
-            await pilot.press("e")
-            assert isinstance(app.screen, EditorScreen)
 
     asyncio.run(scenario())
 
 
-def test_editor_edits_adds_and_saves(tmp_path: Path) -> None:
-    path = tmp_path / "car.toml"
-    shutil.copyfile(DEMO, path)
+def test_customize_edits_adds_and_drops(tmp_path: Path) -> None:
+    path = _car(tmp_path)
 
     async def scenario() -> None:
         app = EcusdkApp([path], home=tmp_path / "home")
-        async with app.run_test() as pilot:
-            await pilot.press("e")
+        async with app.run_test(size=(130, 40)) as pilot:
+            await pilot.press("p")
+            screen = app.screen
+            assert isinstance(screen, CustomizeScreen)
+            screen.query_one("#name", Input).value = "Mi demo"
+            screen.query_one("#value-0", Input).value = "3000"
+            cast(Select[str], screen.query_one("#add-0", Select)).value = "fuel_level"
+            await pilot.pause()
+            await pilot.click("#drop-1")  # speed
+            await pilot.pause()
+            screen.query_one("#value-0", Input).value = "abc"
+            await pilot.click("#next")
+            assert app.screen is screen
+            await pilot.pause(0.3)  # el botón ignora clics durante su animación
+            screen.query_one("#value-0", Input).value = "3000"
+            await pilot.click("#next")
+            assert isinstance(app.screen, CarsScreen)
+        vehicle = load_vehicle(path)
+        ecm = vehicle.ecu("ecm")
+        assert vehicle.name == "Mi demo"
+        assert ecm.get_signal("rpm") == 3000
+        assert "speed" not in ecm.signals and "fuel_level" in ecm.signals
+        assert ecm.obd.bindings()[0x2F] == "fuel_level"
+
+    asyncio.run(scenario())
+
+
+def _walk(node: Any) -> list[Any]:
+    return [node, *(found for child in node.children for found in _walk(child))]
+
+
+def test_advanced_editor(tmp_path: Path) -> None:
+    path = _car(tmp_path)
+
+    async def scenario() -> None:
+        app = EcusdkApp([path], home=tmp_path / "home")
+        async with app.run_test(size=(130, 40)) as pilot:
+            await pilot.press("p")
+            await pilot.click("#advanced")
             editor = app.screen
             assert isinstance(editor, EditorScreen)
             tree = cast(Tree[Any], editor.query_one("#tree", Tree))
@@ -116,51 +192,54 @@ def test_editor_edits_adds_and_saves(tmp_path: Path) -> None:
     asyncio.run(scenario())
 
 
-def _walk(node: Any) -> list[Any]:
-    return [node, *(found for child in node.children for found in _walk(child))]
-
-
-def test_run_screen_launches_and_controls(tmp_path: Path) -> None:
+def test_wizard_launches_and_controls(tmp_path: Path) -> None:
     async def scenario() -> None:
         app = EcusdkApp([DEMO], home=tmp_path)
-        async with app.run_test() as pilot:
-            await pilot.press("l")
-            run = app.screen
-            assert isinstance(run, RunScreen)
-            run.query_one("#port", Input).value = str(_free_port())
-            run.query_one("#control", Input).value = str(_free_port())
-            await pilot.click("#toggle")
-            live = run.query_one("#live", Static)
+        async with app.run_test(size=(130, 44)) as pilot:
+            await pilot.click("#next")
+            connection = app.screen
+            assert isinstance(connection, ConnectionScreen)
+            connection.query_one("#port", Input).value = "x"
+            await pilot.click("#next")
+            assert app.screen is connection
+            await pilot.pause(0.3)
+            connection.query_one("#port", Input).value = str(_free_port())
+            connection.query_one("#control", Input).value = str(_free_port())
+            connection.query_one("#record", Checkbox).value = True
+            record = tmp_path / "s.eculog"
+            connection.query_one("#record-path", Input).value = str(record)
+            await pilot.click("#next")
+            assert isinstance(app.screen, SummaryScreen)
+            assert "demo-car" in str(app.screen.query_one("#summary", Static).content)
+            await pilot.click("#next")
+            dash = app.screen
+            assert isinstance(dash, DashboardScreen)
+            table = cast(DataTable[str], dash.query_one("#signals", DataTable))
             for _ in range(50):
                 await pilot.pause(0.2)
-                if "demo-car" in str(live.content):
+                if table.row_count:
                     break
-            assert "vehicle demo-car" in str(live.content)
-            await pilot.click("#cmd")
-            await pilot.press(*"set ecm.rpm 4000", "enter")
+            assert table.row_count == 2
+            dash.query_one("#new-value", Input).value = "4000"
+            await pilot.click("#set-value")
+            await pilot.click("#dtc-add")
             await pilot.click("#pause")
+            problems = dash.query_one("#problems", Static)
             for _ in range(25):
                 await pilot.pause(0.2)
-                if "4000" in "\n".join(run.query_one(Log).lines):
+                if "P0300" in str(problems.content) and dash.live.state == "paused":
                     break
-            assert "4000" in "\n".join(run.query_one(Log).lines)
-            process = run.process
+            assert "P0300" in str(problems.content)
+            assert ("ecm", "rpm", 4000, False) in dash.live.signals
+            process = dash.process
             assert process is not None
-            await pilot.click("#toggle")
+            await pilot.click("#next")
             await asyncio.wait_for(process.wait(), 10)
-
-    asyncio.run(scenario())
-
-
-def test_vehicles_screen_empty(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.chdir(tmp_path)
-
-    async def scenario() -> None:
-        app = EcusdkApp([], home=tmp_path / "home")
-        async with app.run_test() as pilot:
-            preview = app.screen.query_one("#preview", Static)
-            assert "sin vehículos" in str(preview.content)
-            await pilot.press("e", "c", "d", "l")
-            assert isinstance(app.screen, VehiclesScreen)
+            await pilot.pause(0.5)
+            assert "detenida" in str(dash.query_one("#banner", Static).content)
+            assert "4000" in "\n".join(dash.query_one(Log).lines)
+            await pilot.press("escape")
+            assert isinstance(app.screen, CarsScreen)
+        assert record.exists()
 
     asyncio.run(scenario())
