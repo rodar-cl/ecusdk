@@ -2,11 +2,21 @@ import asyncio
 import shutil
 import socket
 import sys
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any, cast
 
 import pytest
-from textual.widgets import Checkbox, DataTable, Input, Log, Select, Static, Tree
+from textual.widgets import (
+    Checkbox,
+    DataTable,
+    Input,
+    Log,
+    RadioButton,
+    Select,
+    Static,
+    Tree,
+)
 
 from ecusdk.cli import main
 from ecusdk.config import load_vehicle
@@ -31,6 +41,15 @@ def _free_port() -> int:
     with socket.socket() as sock:
         sock.bind(("127.0.0.1", 0))
         return sock.getsockname()[1]
+
+
+async def _until(pilot: Any, condition: Callable[[], bool]) -> None:
+    """Espera una condición de la UI (CI lento, recompose asíncrono)."""
+    for _ in range(100):
+        if condition():
+            return
+        await pilot.pause(0.1)
+    raise AssertionError("la UI no llegó al estado esperado")
 
 
 def _car(tmp_path: Path) -> Path:
@@ -139,9 +158,9 @@ def test_customize_edits_adds_and_drops(tmp_path: Path) -> None:
             screen.query_one("#name", Input).value = "Mi demo"
             screen.query_one("#value-0", Input).value = "3000"
             cast(Select[str], screen.query_one("#add-0", Select)).value = "fuel_level"
-            await pilot.pause()
+            await _until(pilot, lambda: bool(screen.query("#drop-2")))
             await pilot.click("#drop-1")  # speed
-            await pilot.pause()
+            await _until(pilot, lambda: not screen.query("#drop-2"))
             screen.query_one("#value-0", Input).value = "abc"
             await pilot.click("#next")
             await pilot.pause()
@@ -256,5 +275,54 @@ def test_wizard_launches_and_controls(tmp_path: Path) -> None:
             await pilot.pause()
             assert isinstance(app.screen, CarsScreen)
         assert record.exists()
+
+    asyncio.run(scenario())
+
+
+def test_ble_install(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    installed: list[bool] = [False]
+    monkeypatch.setattr("ecusdk.tui.sys.platform", "darwin")
+    monkeypatch.setattr("ecusdk.tui.ble_available", lambda: installed[0])
+    code = "import sys; print('sin red'); sys.exit(1)"
+    monkeypatch.setattr(
+        "ecusdk.tui.ble_install_argv", lambda: [sys.executable, "-c", code]
+    )
+
+    async def scenario() -> None:
+        app = EcusdkApp([DEMO], home=tmp_path)
+        async with app.run_test(size=(130, 40)) as pilot:
+            await pilot.click("#next")
+            await pilot.pause()
+            connection = app.screen
+            assert isinstance(connection, ConnectionScreen)
+            ble = connection.query_one("#ble", RadioButton)
+            tcp = connection.query_one("#tcp", RadioButton)
+            # Cancelar vuelve a Wi-Fi.
+            await pilot.click("#ble")
+            await _until(pilot, lambda: bool(app.screen.query("#no")))
+            await pilot.click("#no")
+            await _until(pilot, lambda: tcp.value)
+            # Falla de instalación: aviso y vuelta a Wi-Fi.
+            await pilot.click("#ble")
+            await _until(pilot, lambda: bool(app.screen.query("#yes")))
+            await pilot.click("#yes")
+            await _until(pilot, lambda: tcp.value)
+            # Instalación correcta: queda en Bluetooth.
+            monkeypatch.setattr(
+                "ecusdk.tui.ble_install_argv",
+                lambda: [sys.executable, "-c", "pass"],
+            )
+            monkeypatch.setattr("ecusdk.tui.ble_available", lambda: installed[-1])
+            installed.append(False)
+            await pilot.click("#ble")
+            await _until(pilot, lambda: bool(app.screen.query("#yes")))
+            installed.append(True)
+            await pilot.click("#yes")
+            await _until(pilot, lambda: not connection.query_one("#next").disabled)
+            await pilot.pause(0.2)
+            assert ble.value
+            await pilot.click("#next")
+            await pilot.pause()
+            assert connection.setup.ble
 
     asyncio.run(scenario())

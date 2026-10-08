@@ -93,7 +93,7 @@ ecusdk tui                       # opcional: ecusdk tui mi-auto.toml
 Es un asistente en cuatro pasos:
 
 1. **Auto**: elige uno de `./examples` o `~/.ecusdk/vehicles`, o crea uno nuevo. *Personalizar* cambia el nombre, el VIN y los valores iniciales, y agrega o quita sensores del catálogo OBD-II. El *modo avanzado* edita todo el TOML. Antes de guardar, todo se valida con `load_vehicle`.
-2. **Conexión**: Wi-Fi/TCP o Bluetooth (BLE), si aceptas conexiones desde otros dispositivos de tu red y si grabas la sesión en `.eculog`. Los puertos están en *Opciones avanzadas*.
+2. **Conexión**: Wi-Fi/TCP o Bluetooth (BLE; si falta `bless`, el asistente ofrece instalarlo con un clic), si aceptas conexiones desde otros dispositivos de tu red y si grabas la sesión en `.eculog`. Los puertos están en *Opciones avanzadas*.
 3. **Iniciar**: muestra un resumen con la dirección a la que debe conectarse tu app.
 4. **En marcha**: sensores en vivo con su valor editable, botones para simular check engine, desconexión o latencia de un módulo, pausa y reinicio, y un registro técnico con el shell de control.
 

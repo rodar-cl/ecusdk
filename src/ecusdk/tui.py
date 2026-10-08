@@ -21,7 +21,7 @@ import tomllib
 from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, ClassVar, cast
+from typing import Any, ClassVar, Literal, cast
 
 import tomli_w
 from rich.text import Text
@@ -168,6 +168,18 @@ def save_validated(path: Path, document: dict[str, Any]) -> str | None:
     return None
 
 
+def ble_available() -> bool:
+    importlib.invalidate_caches()
+    return importlib.util.find_spec("bless") is not None
+
+
+def ble_install_argv() -> list[str]:
+    """Instala ``bless`` en el mismo entorno que ejecuta ecusdk (uv o pip)."""
+    if uv := shutil.which("uv"):
+        return [uv, "pip", "install", "--python", sys.executable, "bless>=0.3"]
+    return [sys.executable, "-m", "pip", "install", "bless>=0.3"]
+
+
 def lan_ip() -> str:
     """IP de este equipo en la red local (UDP ``connect`` no envía paquetes)."""
     try:
@@ -271,15 +283,19 @@ class Setup:
 
 
 class ConfirmScreen(ModalScreen[bool]):
-    def __init__(self, question: str) -> None:
+    def __init__(self, question: str, yes: str = "Sí, borrar") -> None:
         super().__init__()
         self.question = question
+        self.yes = yes
+        self.variant: Literal["primary", "error"] = (
+            "error" if yes == "Sí, borrar" else "primary"
+        )
 
     def compose(self) -> ComposeResult:
         with Vertical(id="dialog"):
             yield Label(self.question)
             with Horizontal():
-                yield Button("Sí, borrar", id="yes", variant="error")
+                yield Button(self.yes, id="yes", variant=self.variant)
                 yield Button("Cancelar", id="no")
 
     @on(Button.Pressed)
@@ -746,23 +762,24 @@ class ConnectionScreen(Step):
         ),
         "ble": (
             "Se anuncia como un adaptador OBDII Bluetooth. Necesitas un teléfono "
-            "físico: los simuladores de iOS y Android no tienen Bluetooth."
+            "físico: los simuladores de iOS y Android no tienen Bluetooth. En "
+            "macOS, da permiso de Bluetooth a tu terminal."
         ),
     }
 
     def body(self) -> Iterable[Any]:
         setup = self.setup
-        ble = importlib.util.find_spec("bless") is not None
+        windows = sys.platform == "win32"
         with VerticalScroll():
             with RadioSet(id="mode"):
                 yield RadioButton("Wi-Fi / red local", value=not setup.ble, id="tcp")
                 yield RadioButton(
-                    "Bluetooth (BLE)"
-                    if ble
-                    else Text("Bluetooth (BLE) — instala ecusdk[ble]"),
-                    value=setup.ble and ble,
+                    "Bluetooth (BLE) — no disponible en Windows"
+                    if windows
+                    else "Bluetooth (BLE)",
+                    value=setup.ble,
                     id="ble",
-                    disabled=not ble,
+                    disabled=windows,
                 )
             yield Static(
                 Text(self.MODE_HELP["ble" if setup.ble else "tcp"]), id="mode-help"
@@ -799,6 +816,52 @@ class ConnectionScreen(Step):
     def mode_changed(self, event: RadioSet.Changed) -> None:
         mode = "ble" if event.pressed.id == "ble" else "tcp"
         self.query_one("#mode-help", Static).update(Text(self.MODE_HELP[mode]))
+        if mode == "ble" and not ble_available():
+
+            def answer(install: bool | None) -> None:
+                if install:
+                    self.install_ble()
+                else:
+                    self.query_one("#tcp", RadioButton).value = True
+
+            self.app.push_screen(
+                ConfirmScreen(
+                    "Bluetooth necesita un componente extra (bless). "
+                    "¿Lo instalo ahora?",
+                    yes="Sí, instalar",
+                ),
+                answer,
+            )
+
+    @work(exclusive=True, group="install")
+    async def install_ble(self) -> None:
+        help_text = self.query_one("#mode-help", Static)
+        next_button = self.query_one("#next", Button)
+        help_text.update(Text("Instalando soporte Bluetooth… (puede tardar un poco)"))
+        next_button.disabled = True
+        try:
+            process = await asyncio.create_subprocess_exec(
+                *ble_install_argv(),
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.STDOUT,
+            )
+            output, _ = await process.communicate()
+            ok = process.returncode == 0 and ble_available()
+        except OSError as error:
+            output, ok = str(error).encode(), False
+        next_button.disabled = False
+        if ok:
+            help_text.update(Text(self.MODE_HELP["ble"]))
+            self.notify("Bluetooth listo ✓")
+            return
+        self.query_one("#tcp", RadioButton).value = True
+        detail = output.decode(errors="replace").strip().splitlines()[-1:] or [""]
+        self.notify(
+            f"No se pudo instalar Bluetooth: {detail[0]}\n"
+            "Prueba a mano: pip install 'ecusdk[ble]'",
+            severity="error",
+            timeout=12,
+        )
 
     def action_next(self) -> None:
         setup = self.setup
@@ -1082,6 +1145,7 @@ class DashboardScreen(Step):
 
 class EcusdkApp(App[None]):
     TITLE = "ECUSDK"
+    ENABLE_COMMAND_PALETTE = False
     SUB_TITLE = "simulador de autos"
     CSS = """
     #stepper { height: 3; content-align: center middle; background: $boost; }
