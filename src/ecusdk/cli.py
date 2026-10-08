@@ -78,6 +78,8 @@ def main(argv: list[str] | None = None) -> int:
     )
     inspect.add_argument("config", nargs="?")
     _remote_options(inspect)
+    tui = commands.add_parser("tui", help="launcher interactivo (ecusdk[tui])")
+    tui.add_argument("config", nargs="*", help="TOMLs adicionales a listar")
     shell = commands.add_parser("shell", help="shell interactivo del vehículo")
     _remote_options(shell)
     for name in _REMOTE:
@@ -92,6 +94,13 @@ def main(argv: list[str] | None = None) -> int:
         return _replay(args)
     if args.command == "inspect" and args.config is not None:
         print(describe(load_vehicle(args.config)))
+        return 0
+    if args.command == "tui":
+        try:
+            from ecusdk.tui import run_tui
+        except ImportError:
+            parser.exit(1, "ecusdk: instala 'ecusdk[tui]' para usar el TUI\n")
+        run_tui(args.config or [])
         return 0
     if args.command == "shell":
         return _shell(args.host, args.control_port)

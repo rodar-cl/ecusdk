@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- `ecusdk tui`: asistente interactivo por pasos (Auto → Conexión → Iniciar →
+  En marcha) con el extra opcional `ecusdk[tui]` (`textual`, `tomli-w`).
+  Crea y personaliza vehículos (sensores del catálogo OBD-II, modo avanzado
+  TOML, validados con `load_vehicle`), elige TCP/BLE, red y grabación, y
+  controla el `ecusdk run` lanzado desde un panel en vivo.
 - Adaptador ELM327 por BLE con el extra opcional `ecusdk[ble]` (`bless`,
   macOS/Linux): `ecusdk run --ble [--ble-name] [--ble-chunk]` y
   `ecusdk.ble.serve_ble`. GATT `0BDA`/`0BDB`/`0BDC`, notificaciones troceadas

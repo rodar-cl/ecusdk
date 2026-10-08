@@ -81,6 +81,22 @@ ecusdk shell                     # sesión interactiva con los mismos comandos
 ecusdk run examples/demo-car.toml --request "01 0D"
 ```
 
+### Launcher interactivo (opcional)
+
+Si prefieres no recordar flags, instala el extra `tui` (usa [Textual](https://textual.textualize.io)) y abre el launcher:
+
+```bash
+pip install 'ecusdk[tui]'
+ecusdk tui                       # opcional: ecusdk tui mi-auto.toml
+```
+
+Es un asistente en cuatro pasos:
+
+1. **Auto**: elige uno de `./examples` o `~/.ecusdk/vehicles`, o crea uno nuevo. *Personalizar* cambia el nombre, el VIN y los valores iniciales, y agrega o quita sensores del catálogo OBD-II. El *modo avanzado* edita todo el TOML. Antes de guardar, todo se valida con `load_vehicle`.
+2. **Conexión**: Wi-Fi/TCP o Bluetooth (BLE; si falta `bless`, el asistente ofrece instalarlo con un clic), si aceptas conexiones desde otros dispositivos de tu red y si grabas la sesión en `.eculog`. Los puertos están en *Opciones avanzadas*.
+3. **Iniciar**: muestra un resumen con la dirección a la que debe conectarse tu app.
+4. **En marcha**: sensores en vivo con su valor editable, botones para simular check engine, desconexión o latencia de un módulo, pausa y reinicio, y un registro técnico con el shell de control.
+
 ### Adaptador BLE (opcional)
 
 Para probar apps móviles que hablan con adaptadores ELM327 por Bluetooth Low Energy, instala el extra `ble` (macOS y Linux; usa [bless](https://github.com/kevincar/bless)) y añade `--ble`:
@@ -90,7 +106,7 @@ pip install 'ecusdk[ble]'
 ecusdk run examples/demo-car.toml --ble
 ```
 
-Se anuncia como `OBDII ecusdk` (`--ble-name`) con el GATT habitual de estos adaptadores: servicio `0BDA`, escritura en `0BDB` y notificaciones en `0BDC`. El servidor TCP sigue activo en paralelo. Las respuestas se notifican en trozos de 20 bytes (`--ble-chunk`), como un adaptador real sin MTU negociado, de modo que la app debe acumular notificaciones hasta el prompt `>`. Hace falta un teléfono físico: los simuladores de iOS y Android no tienen Bluetooth. En macOS, la terminal desde la que se ejecuta necesita permiso en *Ajustes del Sistema → Privacidad y seguridad → Bluetooth*; sin él, macOS cierra el proceso.
+Se anuncia como `OBDII ecusdk` (`--ble-name`) con el GATT habitual de estos adaptadores: servicio `0BDA`, escritura en `0BDB` y notificaciones en `0BDC`. El servidor TCP sigue activo en paralelo. Las respuestas se notifican en trozos de 20 bytes (`--ble-chunk`), como un adaptador real sin MTU negociado, de modo que la app debe acumular notificaciones hasta el prompt `>`. Hace falta un teléfono físico: los simuladores de iOS y Android no tienen Bluetooth. En macOS, la terminal desde la que se ejecuta necesita permiso en *Ajustes del Sistema → Privacidad y seguridad → Bluetooth*; sin él, macOS cierra el proceso. Algunas terminales de terceros no declaran el uso de Bluetooth, y en ellas macOS aborta el proceso sin preguntar; usa Terminal o iTerm. El asistente `ecusdk tui` detecta este caso y ofrece seguir sólo con Wi-Fi.
 
 ## Métricas
 
