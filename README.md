@@ -54,7 +54,17 @@ La salida contiene la respuesta ISO-TP en hexadecimal (`04 41 0C 0D 48`; los pri
 ecusdk run examples/demo-car.toml
 ```
 
-La aplicación cliente debe enviar comandos ELM327 terminados en retorno de carro (`\r`). También puedes ejecutar una consulta de una sola vez sin iniciar el servidor:
+La aplicación cliente debe enviar comandos ELM327 terminados en retorno de carro (`\r`). Mientras el vehículo corre, otro terminal puede modificarlo a través del shell de control (`127.0.0.1:35001`):
+
+```bash
+ecusdk set ECM.rpm 3500          # la siguiente consulta 010C devuelve 41 0C 36 B0
+ecusdk dtc ECM add P0301         # la consulta 03 devuelve el DTC
+ecusdk fault ECM timeout 500ms   # la ECU deja de responder durante 500 ms
+ecusdk inspect                   # estado de ECUs, señales, PIDs, DTCs y fallos
+ecusdk shell                     # sesión interactiva con los mismos comandos
+```
+
+`ecusdk inspect vehiculo.toml` describe un archivo sin ejecutarlo. También puedes ejecutar una consulta de una sola vez sin iniciar el servidor:
 
 ```bash
 ecusdk run examples/demo-car.toml --request "01 0D"
@@ -93,16 +103,32 @@ initial = 0
 
 La señal `rpm` alimenta el PID `01 0C`; al cambiar el estado de la ECU, la respuesta refleja el nuevo valor. Puedes definir varios buses y ECUs en un mismo vehículo.
 
+Las señales pueden seguir un generador determinista (`constant`, `linear`, `ramp`, `sine` o `random` con seed) y un escenario puede cambiar señales e inyectar fallos en instantes concretos. [`examples/scenario-car.toml`](./examples/scenario-car.toml) muestra ambos:
+
+```toml
+[ecus.ecm.signals.rpm]
+initial = 850
+max = 7000
+generator = { type = "ramp", start = 850, end = 3000, duration = 10, at = 5 }
+
+[scenario]
+events = [
+    { at = 20, ecu = "ecm", action = "sensor_frozen", signal = "rpm", duration = 5 },
+    { at = 30, ecu = "tcm", action = "ecu_offline", duration = 3 },
+]
+```
+
 ## Qué incluye
 
 | Área | Disponible hoy |
 | --- | --- |
 | CAN | Bus virtual con nodos, filtros y timestamps; SocketCAN en Linux mediante interfaz explícita |
 | ISO-TP | Direccionamiento normal, envío segmentado, Flow Control, bloques, STmin y timeouts |
-| OBD-II | Mode 01 para RPM/velocidad; Mode 03 para leer DTCs; Mode 04 para borrarlos; Mode 09 PID 02 para VIN |
-| Simulación | Estado y señales por ECU, reloj virtual y escenarios deterministas desde la API Python |
-| Adaptador | Emulador ELM327 sobre TCP; transporte pseudo-terminal disponible en plataformas compatibles |
-| Herramientas | API Python tipada y CLI `ecusdk run` |
+| OBD-II | Mode 01 con PIDs soportados (`0100`…), RPM, velocidad, temperaturas, carga, acelerador, combustible, MAF y tensión; Mode 03/04 para DTCs; Mode 09 PID 02 para VIN |
+| Simulación | Señales con generadores, reloj real o virtual, escenarios TOML deterministas con pausa, reinicio y seed |
+| Fallos | ECU offline, timeout, latencia, Flow Control tardío, frames perdidos, duplicados o malformados, longitud inválida, PID incorrecto, CF perdido, secuencia errónea, interrupción ISO-TP, sensor congelado, fuera de rango e intermitente |
+| Adaptador | Emulador ELM327 sobre TCP o pseudo-terminal, con consultas funcionales a varias ECUs y `ATSH` |
+| Herramientas | API Python tipada y CLI `run`, `inspect`, `shell`, `get`, `set`, `dtc`, `fault` y `faults` |
 
 Para conocer los detalles de los protocolos, límites y ejemplos de la API, consulta la [guía de protocolos](./docs/protocols.md).
 

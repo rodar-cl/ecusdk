@@ -4,12 +4,14 @@ from __future__ import annotations
 
 import importlib
 import os
+import re
 import socket
 import threading
 from collections.abc import Callable
 from typing import Protocol, cast
 
 from ecusdk.can import CanFrame
+from ecusdk.errors import ProtocolError
 from ecusdk.simulation import Vehicle
 
 OpenPty = Callable[[], tuple[int, int]]
@@ -99,86 +101,141 @@ class PtySerialTransport:
             os.close(self.master)
 
 
+def serve_lines(transport: ByteTransport, handler: Callable[[str], str]) -> None:
+    """Lee líneas terminadas en CR/LF, escribe ``handler(línea)`` y cierra al EOF."""
+    try:
+        buffer = bytearray()
+        while True:
+            chunk = transport.read()
+            if not chunk:
+                return
+            buffer.extend(chunk)
+            while b"\r" in buffer or b"\n" in buffer:
+                index = next(i for i, value in enumerate(buffer) if value in (10, 13))
+                raw = bytes(buffer[:index])
+                del buffer[: index + 1]
+                if raw:
+                    response = handler(raw.decode("utf-8", "replace"))
+                    transport.write(response.encode("utf-8"))
+    finally:
+        transport.close()
+
+
+_OBD_QUERY = re.compile(r"(?:[0-9A-F]{2}){1,7}")
+_NO_OP_AT = re.compile(r"AT(?:L[01]|AT[0-2]|M[01]|CAF[01]|ST[0-9A-F]{2}|AL|NL)")
+
+
 class Elm327Emulator:
-    def __init__(self, vehicle: Vehicle, bus: str | None = None) -> None:
+    """Subconjunto ELM327 v1.5 sobre las ECUs de un bus del vehículo.
+
+    Sin ``ATSH`` las consultas son funcionales: se envían a cada ECU del bus
+    y se imprime una línea por ECU que responde. ``ATSH 7E0`` dirige las
+    consultas sólo a la ECU con ese ``request_id``. ``timeout`` es la espera
+    por respuesta de cada ECU, en segundos del reloj del vehículo.
+    """
+
+    def __init__(
+        self, vehicle: Vehicle, bus: str | None = None, timeout: float = 0.2
+    ) -> None:
         self.vehicle = vehicle
         self.bus = bus or next(iter(vehicle.buses))
+        self.timeout = timeout
+        self._defaults()
+
+    def _defaults(self) -> None:
         self.echo = True
         self.headers = False
+        self.spaces = True
         self.protocol = "AUTO"
+        self.header: int | None = None
 
     def session(self) -> Elm327Emulator:
         """Create isolated AT state while retaining the shared vehicle."""
-        return Elm327Emulator(self.vehicle, self.bus)
+        return Elm327Emulator(self.vehicle, self.bus, self.timeout)
 
     def command(self, command: str) -> str:
         text = command.strip().upper().replace(" ", "")
-        if text == "ATZ":
-            self.echo, self.headers, self.protocol = True, False, "AUTO"
+        if text in ("ATZ", "ATWS", "ATD"):
+            self._defaults()
+            return "ELM327 v1.5\r\r>" if text != "ATD" else "OK\r\r>"
+        if text == "ATI":
             return "ELM327 v1.5\r\r>"
-        if text == "ATE0":
-            self.echo = False
-            return "OK\r\r>"
-        if text == "ATE1":
-            self.echo = True
-            return "OK\r\r>"
-        if text == "ATH0":
-            self.headers = False
-            return "OK\r\r>"
-        if text == "ATH1":
-            self.headers = True
+        settings = {
+            "ATE0": ("echo", False),
+            "ATE1": ("echo", True),
+            "ATH0": ("headers", False),
+            "ATH1": ("headers", True),
+            "ATS0": ("spaces", False),
+            "ATS1": ("spaces", True),
+        }
+        if text in settings:
+            setattr(self, *settings[text])
             return "OK\r\r>"
         if text.startswith("ATSP"):
             self.protocol = text[4:] or "AUTO"
             return "OK\r\r>"
         if text == "ATDP":
             return f"{self.protocol}\r\r>"
-        queries = {"010C", "010D", "03", "04", "0902"}
-        if text in queries:
-            ecu = self.vehicle.ecus[0]
+        if text.startswith("ATSH") and re.fullmatch(r"[0-9A-F]{3}", text[4:]):
+            self.header = int(text[4:], 16)
+            return "OK\r\r>"
+        if _NO_OP_AT.fullmatch(text):
+            return "OK\r\r>"
+        if _OBD_QUERY.fullmatch(text) and 0x01 <= int(text[:2], 16) <= 0x0A:
+            return self._query(bytes.fromhex(text))
+        return "?\r\r>"
+
+    def _query(self, request: bytes) -> str:
+        ecus = [
+            ecu
+            for ecu in self.vehicle.ecus
+            if (ecu.bus is None or ecu.bus == self.bus)
+            and (self.header is None or ecu.request_id == self.header)
+        ]
+        lines: list[str] = []
+        failed = False
+        for ecu in ecus:
+            frame = CanFrame(ecu.request_id, bytes((len(request),)) + request)
             try:
-                request = bytes.fromhex(text)
-                frame = CanFrame(ecu.request_id, bytes((len(request),)) + request)
-                payload = self.vehicle.exchange_isotp(self.bus, frame)
+                payload = self.vehicle.exchange_isotp(self.bus, frame, self.timeout)
+            except ProtocolError:
+                failed = True
+                continue
             except (ValueError, RuntimeError, KeyError):
                 payload = None
             if payload is None:
-                return "NO DATA\r\r>"
-            result = payload.hex(" ").upper()
+                continue
+            separator = " " if self.spaces else ""
+            line = (payload.hex(" ") if self.spaces else payload.hex()).upper()
             if self.headers:
-                result = f"{ecu.response_id:03X}  " + result
-            return result + "\r\r>"
-        return "?\r\r>"
+                line = f"{ecu.response_id:03X}{separator * 2}{line}"
+            lines.append(line)
+        if not lines:
+            lines.append("CAN ERROR" if failed else "NO DATA")
+        return "\r".join(lines) + "\r\r>"
 
     def serve(self, transport: ByteTransport) -> None:
-        try:
-            buffer = bytearray()
-            while True:
-                chunk = transport.read()
-                if not chunk:
-                    return
-                buffer.extend(chunk)
-                while b"\r" in buffer or b"\n" in buffer:
-                    index = next(
-                        i for i, value in enumerate(buffer) if value in (10, 13)
-                    )
-                    raw = bytes(buffer[:index])
-                    del buffer[: index + 1]
-                    if raw:
-                        command = raw.decode("ascii", "replace")
-                        response = (command if self.echo else "") + self.command(
-                            command
-                        )
-                        transport.write(response.encode("ascii"))
-        finally:
-            transport.close()
+        def handle(command: str) -> str:
+            return (command if self.echo else "") + self.command(command)
+
+        serve_lines(transport, handle)
 
 
-class TcpElm327Server:
-    """Blocking TCP server. Call ``close`` from the owning application."""
+class LineService(Protocol):
+    """Servicio de líneas: ``session`` crea el estado de cada conexión."""
+
+    def session(self) -> LineService: ...
+    def serve(self, transport: ByteTransport) -> None: ...
+
+
+class TcpServer:
+    """Blocking TCP server; one thread per connection.
+
+    Call ``close`` from the owning application.
+    """
 
     def __init__(
-        self, emulator: Elm327Emulator, host: str = "127.0.0.1", port: int = 0
+        self, emulator: LineService, host: str = "127.0.0.1", port: int = 0
     ) -> None:
         self.emulator, self.host, self.port = emulator, host, port
         self._socket: socket.socket | None = None
@@ -216,4 +273,5 @@ class TcpElm327Server:
             self._socket.close()
 
 
-Elm327Server = TcpElm327Server
+TcpElm327Server = TcpServer
+Elm327Server = TcpServer

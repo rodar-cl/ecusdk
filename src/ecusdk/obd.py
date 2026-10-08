@@ -67,8 +67,9 @@ def obd_request(mode: int, pid: int = 0) -> bytes:
 class PidCodec:
     """Codec PID numérico inmutable; encode/decode usan sólo bytes del valor.
 
-    Valores no finitos, fuera de rango o datos de longitud inválida producen
-    ObdError. La cuantización redondea a la unidad codificada más cercana.
+    El valor físico es ``raw / scale + offset``. Valores no finitos, fuera de
+    rango o datos de longitud inválida producen ObdError. La cuantización
+    redondea a la unidad codificada más cercana.
     """
 
     identifier: int
@@ -78,36 +79,43 @@ class PidCodec:
     maximum: float
     scale: float
     source: str
+    offset: float = 0.0
 
     def __post_init__(self) -> None:
+        values = (self.minimum, self.maximum, self.scale, self.offset)
         if (
             not 0 <= self.identifier <= 255
             or self.length <= 0
-            or not all(
-                math.isfinite(v) for v in (self.minimum, self.maximum, self.scale)
-            )
+            or not all(math.isfinite(v) for v in values)
             or self.scale <= 0
-            or self.minimum < 0
             or self.minimum > self.maximum
-            or not math.isfinite(self.maximum * self.scale)
-            or self.minimum * self.scale != round(self.minimum * self.scale)
-            or self.maximum * self.scale != round(self.maximum * self.scale)
-            or round(self.maximum * self.scale) >= 1 << (8 * self.length)
         ):
             raise ObdError("definición de codec PID inválida")
+        raw_min, raw_max = (self._raw(v) for v in (self.minimum, self.maximum))
+        if (
+            not math.isfinite(raw_max)
+            or raw_min < 0
+            or not math.isclose(raw_min, round(raw_min), abs_tol=1e-9)
+            or not math.isclose(raw_max, round(raw_max), abs_tol=1e-6)
+            or round(raw_max) >= 1 << (8 * self.length)
+        ):
+            raise ObdError("definición de codec PID inválida")
+
+    def _raw(self, value: float) -> float:
+        return (value - self.offset) * self.scale
 
     def encode(self, value: int | float) -> bytes:
         """Codifica un valor físico en sus bytes OBD."""
         if not math.isfinite(value) or not self.minimum <= value <= self.maximum:
             raise ObdError(f"valor fuera de rango para PID {self.identifier:02X}")
-        return round(value * self.scale).to_bytes(self.length, "big")
+        return round(self._raw(value)).to_bytes(self.length, "big")
 
     def decode(self, data: bytes) -> float:
         """Decodifica los bytes de valor; valida longitud y rango."""
         if len(data) != self.length:
             raise ObdError("longitud de datos PID inválida")
-        value = int.from_bytes(data, "big") / self.scale
-        if not self.minimum <= value <= self.maximum:
+        value = int.from_bytes(data, "big") / self.scale + self.offset
+        if not self.minimum - 1e-9 <= value <= self.maximum + 1e-9:
             raise ObdError("valor PID fuera de rango")
         return value
 
@@ -115,6 +123,22 @@ class PidCodec:
 RPM_PID = PidCodec(0x0C, 2, "rpm", 0, 16383.75, 4, "rpm")
 SPEED_PID = PidCodec(0x0D, 1, "km/h", 0, 255, 1, "speed")
 PID_CODECS = (RPM_PID, SPEED_PID)
+_PERCENT = 255 / 100
+# Fórmulas SAE J1979; sólo RPM y velocidad se asignan por defecto.
+PID_CATALOG = (
+    PidCodec(0x04, 1, "%", 0, 100, _PERCENT, "engine_load"),
+    PidCodec(0x05, 1, "°C", -40, 215, 1, "coolant_temperature", -40),
+    PidCodec(0x0B, 1, "kPa", 0, 255, 1, "intake_manifold_pressure"),
+    RPM_PID,
+    SPEED_PID,
+    PidCodec(0x0F, 1, "°C", -40, 215, 1, "intake_air_temperature", -40),
+    PidCodec(0x10, 2, "g/s", 0, 655.35, 100, "maf"),
+    PidCodec(0x11, 1, "%", 0, 100, _PERCENT, "throttle_position"),
+    PidCodec(0x2F, 1, "%", 0, 100, _PERCENT, "fuel_level"),
+    PidCodec(0x42, 2, "V", 0, 65.535, 1000, "battery_voltage"),
+    PidCodec(0x46, 1, "°C", -40, 215, 1, "ambient_air_temperature", -40),
+    PidCodec(0x5C, 1, "°C", -40, 210, 1, "oil_temperature", -40),
+)
 
 
 class ObdRegistry:
@@ -127,7 +151,7 @@ class ObdRegistry:
     def __init__(self, signals: MutableMapping[str, int | float]) -> None:
         self._signals = signals
         self._codecs: dict[int, PidCodec] = {
-            codec.identifier: codec for codec in PID_CODECS
+            codec.identifier: codec for codec in PID_CATALOG
         }
         self._bindings: dict[int, str] = {
             codec.identifier: codec.source for codec in PID_CODECS
@@ -175,8 +199,36 @@ class ObdRegistry:
         self._defaults.discard(identifier)
         return codec
 
+    def bindings(self) -> dict[int, str]:
+        """Copia de las asignaciones PID → señal activas."""
+        return dict(self._bindings)
+
+    def supported(self) -> list[int]:
+        """PIDs que responden: asignados a una señal existente o por defecto."""
+        return sorted(
+            identifier
+            for identifier, source in self._bindings.items()
+            if source in self._signals or identifier in self._defaults
+        )
+
+    def _support_bitmap(self, base: int) -> bytes:
+        bits = 0
+        for identifier in self.supported():
+            if base < identifier <= base + 0x20:
+                bits |= 1 << (0x20 - (identifier - base))
+            elif identifier > base + 0x20:
+                bits |= 1
+        return bytes((0x41, base)) + bits.to_bytes(4, "big")
+
     def encode(self, identifier: int) -> bytes | None:
-        """Devuelve los bytes de respuesta Mode 01 para un PID asignado."""
+        """Devuelve los bytes de respuesta Mode 01 para un PID asignado.
+
+        Los PIDs 00, 20, 40… responden el bitmap de PIDs soportados.
+        """
+        if identifier % 0x20 == 0 and identifier not in self._codecs:
+            if identifier and not any(i > identifier for i in self.supported()):
+                return None
+            return self._support_bitmap(identifier)
         codec = self._codecs.get(identifier)
         source = self._bindings.get(identifier)
         if codec is None or source is None:
