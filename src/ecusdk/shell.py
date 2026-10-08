@@ -123,9 +123,11 @@ class VehicleShell:
             return f"ERROR: {message}"
 
     def session(self) -> VehicleShell:
+        """El shell no tiene estado por conexión; devuelve la misma instancia."""
         return self
 
     def serve(self, transport: ByteTransport) -> None:
+        """Ejecuta cada línea recibida hasta EOF y responde una línea por comando."""
         serve_lines(transport, lambda line: self.execute(line) + "\n")
 
     def _list(self, args: list[str]) -> str:

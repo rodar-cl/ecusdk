@@ -10,11 +10,11 @@ Simula ECUs y conversa con ellas usando CAN, ISO-TP y OBD-II, sin depender de un
 
 [![CI](https://github.com/rodar-cl/ecusdk/actions/workflows/ci.yml/badge.svg)](https://github.com/rodar-cl/ecusdk/actions/workflows/ci.yml)
 [![Python 3.11–3.14](https://img.shields.io/badge/Python-3.11_%E2%80%93_3.14-3776AB?logo=python&logoColor=white)](https://www.python.org/)
-[![Tests: 125](https://img.shields.io/badge/tests-125_passing-2ea44f)](#métricas)
-[![Cobertura: 95%](https://img.shields.io/badge/cobertura-95%25-2ea44f)](#métricas)
+[![Tests: 158](https://img.shields.io/badge/tests-158_passing-2ea44f)](#métricas)
+[![Cobertura: 98%](https://img.shields.io/badge/cobertura-98%25-2ea44f)](#métricas)
 [![Pyright strict](https://img.shields.io/badge/pyright-strict-1f6feb)](./pyproject.toml)
 [![Dependencias: 0](https://img.shields.io/badge/dependencias-0-brightgreen)](./pyproject.toml)
-[![Estado: experimental](https://img.shields.io/badge/estado-experimental-orange)](#alcance-y-estado)
+[![Versión: 0.1.0](https://img.shields.io/badge/versi%C3%B3n-0.1.0-orange)](#alcance-y-estado)
 [![Licencia: PolyForm Noncommercial](https://img.shields.io/badge/licencia-PolyForm_NC_1.0.0-6f42c1)](./LICENSE)
 
 [Empieza](#empieza-en-un-minuto) · [Métricas](#métricas) · [Rendimiento](#rendimiento) · [Configuración](#configura-un-vehículo) · [Protocolos](./docs/protocols.md)
@@ -87,9 +87,9 @@ Medido sobre `main` con `uv run pytest --cov=ecusdk`.
 
 | | |
 | --- | --- |
-| 🧪 Tests | **125** pasando en **1.7 s** (incluye pruebas de propiedades con Hypothesis) |
-| 📈 Cobertura | **95 %** de líneas; CI exige ≥ 90 % |
-| 🧩 Código | ~1.900 líneas en `src/` · ~1.600 líneas de tests |
+| 🧪 Tests | **158** pasando en **1.5 s** (incluye pruebas de propiedades con Hypothesis y contrato de API) |
+| 📈 Cobertura | **98 %** de líneas; CI exige ≥ 90 % |
+| 🧩 Código | ~3.200 líneas en `src/` · ~2.400 líneas de tests |
 | 📦 Dependencias de runtime | **0**, sólo biblioteca estándar |
 | ⚡ Import | ~10 ms (`python -X importtime -c "import ecusdk"`) |
 | 🔒 Tipado | Pyright en modo `strict` sobre `src` y `tests` |
@@ -100,16 +100,14 @@ Medido sobre `main` con `uv run pytest --cov=ecusdk`.
 
 | Módulo | Sentencias | Cobertura |
 | --- | ---: | ---: |
-| `isotp_transport.py` | 149 | 100 % |
-| `clock.py` · `errors.py` · `__init__.py` | 31 | 100 % |
-| `isotp.py` | 121 | 99 % |
-| `can.py` | 225 | 98 % |
-| `obd.py` | 107 | 98 % |
-| `config.py` | 56 | 96 % |
-| `simulation.py` | 338 | 95 % |
-| `elm327.py` | 157 | 88 % |
-| `cli.py` | 39 | 74 % |
-| **Total** | **1.223** | **95 %** |
+| `isotp_transport.py` · `signals.py` · `errors.py` · `__init__.py` | 250 | 100 % |
+| `isotp.py` · `shell.py` | 257 | 99 % |
+| `simulation.py` | 531 | 98 % |
+| `can.py` · `obd.py` · `config.py` · `cli.py` | 538 | 98 % |
+| `faults.py` | 77 | 95 % |
+| `elm327.py` | 180 | 94 % |
+| `clock.py` | 26 | 92 % |
+| **Total** | **1.859** | **98 %** |
 
 </details>
 
@@ -125,6 +123,7 @@ Todo ocurre en memoria y sin `sleep`: el reloj virtual hace que los timeouts y e
 | Consulta OBD `09 02` (VIN, multi-frame + Flow Control) | 32 µs | 102 µs | ~31.000 consultas/s |
 | Transferencia ISO-TP de 4095 B (586 frames) | 0,65 ms | 0,69 ms | ~6,3 MB/s |
 | Ida y vuelta ELM327 por TCP (`010C`) | 42 µs | 122 µs | ~24.000 comandos/s |
+| 20 ECUs en un bus, consultas en rotación (PRD §56) | — | — | ~21.700 frames/s |
 | CLI `ecusdk run --request "01 0C"` en frío | 33 ms | 37 ms | proceso completo |
 
 Como referencia, un bus CAN real a 500 kbit/s transporta del orden de 4.000 frames por segundo: el simulador va muy por delante del hardware que imita.
@@ -203,13 +202,13 @@ Para conocer los detalles de los protocolos, límites y ejemplos de la API, cons
 
 ## Alcance y estado
 
-ECUSDK se encuentra en una etapa experimental (`0.1.0.dev0`). Las interfaces y la configuración pueden evolucionar. La implementación actual cubre un núcleo funcional de CAN, ISO-TP, OBD-II y simulación; las capacidades de UDS más amplio, CAN FD, importación DBC, grabación y reproducción todavía forman parte de ideas futuras.
+ECUSDK está en `0.1.0`, su primera versión con un contrato de API probado (`tests/test_release_contract.py`). Hasta `1.0` las versiones menores pueden introducir cambios incompatibles, siempre anotados en el [CHANGELOG](./CHANGELOG.md). La versión cubre CAN, ISO-TP, OBD-II, simulación con escenarios y fallos, ELM327 y la CLI de control. UDS, grabación y reproducción, CAN FD e importación DBC forman parte de las siguientes versiones.
 
 El simulador modela comportamientos observables del protocolo. No emula firmware de fabricantes, un runtime AUTOSAR completo ni los componentes electrónicos de una ECU. SocketCAN requiere Linux y una interfaz preparada por quien ejecuta la herramienta.
 
 ```mermaid
 flowchart LR
-    NOW[Hoy<br/>CAN · ISO-TP · OBD-II<br/>ECUs y ELM327 TCP] --> NEXT[Por explorar<br/>UDS más amplio · CAN FD<br/>DBC · grabación y replay]
+    NOW[0.1<br/>CAN · ISO-TP · OBD-II<br/>escenarios · fallos · ELM327 · CLI] --> NEXT[0.2<br/>UDS · grabación y replay] --> LATER[Después<br/>CAN FD · DBC · gateways]
 ```
 
 ## Desarrollo

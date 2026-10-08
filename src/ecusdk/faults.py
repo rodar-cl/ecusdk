@@ -86,6 +86,7 @@ class Fault:
             raise SimulationError("period debe ser positivo")
 
     def active(self, now: float) -> bool:
+        """Indica si el fallo está vigente en ``now``."""
         return self.start <= now < self.until
 
     def frame_delay(self, frame: CanFrame) -> float:

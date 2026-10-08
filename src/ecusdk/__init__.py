@@ -10,6 +10,7 @@ from ecusdk.can import (
     VirtualCanNode,
 )
 from ecusdk.clock import Clock, RealClock, VirtualClock
+from ecusdk.config import load_vehicle
 from ecusdk.elm327 import (
     Elm327Emulator,
     Elm327Server,
@@ -97,4 +98,5 @@ __all__ = [
     "VirtualCanBus",
     "VirtualCanNode",
     "VirtualClock",
+    "load_vehicle",
 ]

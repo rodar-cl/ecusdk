@@ -46,6 +46,8 @@ __all__ = [
 
 
 class VehicleState(Enum):
+    """Estado del lifecycle de un ``Vehicle``."""
+
     STOPPED = "stopped"
     RUNNING = "running"
     PAUSED = "paused"
@@ -146,6 +148,7 @@ class ECU:
 
     @property
     def signal_map(self) -> SignalMap:
+        """Las señales como ``SignalMap``, con acceso a overrides de fallos."""
         return cast(SignalMap, self.signals)
 
     def drive(self, name: str, generator: SignalGenerator | None) -> None:
@@ -164,6 +167,7 @@ class ECU:
             self.generators[name] = generator
 
     def reset(self) -> None:
+        """Cancela ISO-TP y restaura las señales iniciales."""
         self._transport.reset()
         for name, value in self._initial_signals.items():
             self.signals[name] = value
@@ -173,15 +177,18 @@ class ECU:
         self._transport = IsoTpTransport(self.response_id, self.request_id, clock=clock)
 
     def get_signal(self, name: str) -> SignalValue:
+        """Valor observable de una señal; KeyError si no existe."""
         try:
             return self.signals[name]
         except KeyError as error:
             raise KeyError(f"señal desconocida: {name}") from error
 
     def set_signal(self, name: str, value: SignalValue) -> None:
+        """Escribe una señal validando tipo, finitud y límites."""
         self.signals[name] = value
 
     def obd_payload(self, request: bytes) -> bytes | None:
+        """Respuesta OBD a un payload de petición, o ``None`` si no se soporta."""
         if not request:
             return None
         mode = request[0]
@@ -202,6 +209,7 @@ class ECU:
         return None
 
     def handle_frames(self, frame: CanFrame) -> list[CanFrame] | None:
+        """Procesa un frame dirigido a la ECU y devuelve los frames a emitir."""
         if not self.online or frame.arbitration_id != self.request_id:
             return None
         try:
@@ -231,6 +239,7 @@ class ECU:
             return []
 
     def handle(self, frame: CanFrame) -> CanFrame | None:
+        """Como ``handle_frames`` pero sólo el primer frame de respuesta."""
         frames = self.handle_frames(frame)
         return frames[0] if frames else None
 
@@ -308,20 +317,25 @@ class Scenario:
 
     @property
     def started(self) -> bool:
+        """Indica si el escenario ya tiene origen de tiempo."""
         return self._origin is not None
 
     def start(self, now: float) -> None:
+        """Fija el origen de tiempo en ``now``."""
         self._origin = now
 
     def reset(self) -> None:
+        """Vuelve al primer evento y olvida origen y pausa."""
         self._cursor = 0
         self._origin = None
         self._paused_at = None
 
     def pause(self, now: float) -> None:
+        """Congela el tiempo del escenario en ``now``."""
         self._paused_at = now
 
     def resume(self, now: float) -> None:
+        """Reanuda desplazando el origen lo que duró la pausa."""
         if self._paused_at is not None and self._origin is not None:
             self._origin += now - self._paused_at
         self._paused_at = None
@@ -336,6 +350,7 @@ class Scenario:
         return _elapsed(end - origin)
 
     def due(self, now: float) -> list[ScenarioEvent]:
+        """Eventos vencidos desde la última llamada, en orden."""
         elapsed = self.elapsed(now)
         due: list[ScenarioEvent] = []
         while (
@@ -346,10 +361,12 @@ class Scenario:
         return due
 
     def to_json(self) -> str:
+        """Serializa los eventos a JSON."""
         return json.dumps([asdict(event) for event in self.events], sort_keys=True)
 
     @classmethod
     def from_json(cls, value: str) -> Scenario:
+        """Crea un escenario desde ``to_json``."""
         return cls(json.loads(value))
 
 
@@ -456,6 +473,7 @@ class Vehicle:
         self._delayed.clear()
 
     def start(self) -> None:
+        """Conecta las ECUs a sus buses virtuales y pasa a RUNNING."""
         with self._exchange_lock:
             self._connect_virtual_nodes()
             self.state = VehicleState.RUNNING
@@ -465,6 +483,7 @@ class Vehicle:
                 self.scenario.start(self.clock.now())
 
     def stop(self) -> None:
+        """Desconecta las ECUs y pasa a STOPPED; conserva señales y fallos."""
         with self._exchange_lock:
             self.state = VehicleState.STOPPED
             self._disconnect_virtual_nodes()
@@ -472,6 +491,7 @@ class Vehicle:
                 ecu.set_protocol_clock(self.clock)
 
     def pause(self) -> None:
+        """Congela escenario, generadores y tráfico hasta ``resume``."""
         with self._exchange_lock:
             if self.state is VehicleState.RUNNING:
                 now = self.clock.now()
@@ -481,6 +501,7 @@ class Vehicle:
                 self.state = VehicleState.PAUSED
 
     def resume(self) -> None:
+        """Reanuda desde PAUSED sin contar el tiempo pausado."""
         with self._exchange_lock:
             if self.state is VehicleState.PAUSED:
                 now = self.clock.now()
@@ -703,6 +724,7 @@ class Vehicle:
     def exchange(
         self, bus_name: str, request: CanFrame, timeout: float = 0.0
     ) -> CanFrame | None:
+        """Como ``exchange_frames`` pero sólo el primer frame de respuesta."""
         responses = self.exchange_frames(bus_name, request, timeout)
         return responses[0] if responses else None
 
@@ -825,5 +847,6 @@ class Vehicle:
     def exchange_isotp(
         self, bus_name: str, request: CanFrame, timeout: float = 0.0
     ) -> bytes | None:
+        """Como ``exchange_frames`` pero reensambla el payload ISO-TP."""
         responses = self.exchange_frames(bus_name, request, timeout)
         return reassemble(responses) if responses else None

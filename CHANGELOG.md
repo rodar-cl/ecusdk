@@ -1,7 +1,15 @@
 # Changelog
 
-## Unreleased
+## 0.1.0 — 2026-10-08
 
+Primera versión con contrato de API probado. Cumple los criterios de
+aceptación de v0.1 del PRD salvo la validación con Rodar, que queda pendiente.
+
+- Tests de contrato público: nombres exportados, firmas clave, jerarquía de
+  errores y docstrings obligatorios en toda la API pública.
+- Prueba de rendimiento de 20 ECUs en un bus (~21.700 frames/s en un M4) en
+  tests y en `examples/bench.py`.
+- `load_vehicle` exportado desde `ecusdk`.
 - Añadidos generadores de señales deterministas (constant, linear, ramp, sine,
   random con seed y custom) en API y TOML, y `Vehicle.advance` / `elapsed`.
 - Escenarios TOML (`[scenario] events`) con cambios de señal y fallos; la
