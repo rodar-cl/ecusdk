@@ -17,6 +17,7 @@ from typing import Any, TypeVar, cast
 
 import pytest
 from textual.screen import Screen
+from textual.widget import Widget
 from textual.widgets import Checkbox, DataTable, Input, Log, RadioButton, Static, Tree
 
 from ecusdk.cli import main
@@ -46,25 +47,42 @@ def _free_port() -> int:
         return sock.getsockname()[1]
 
 
-async def _until(pilot: Any, condition: Callable[[], object]) -> None:
+async def _until(
+    pilot: Any,
+    condition: Callable[[], object],
+    what: str = "",
+    detail: Callable[[], str] | None = None,
+) -> None:
     """Espera hasta 15 s a que ``condition`` sea verdadera."""
     for _ in range(150):
         if condition():
             return
         await pilot.pause(0.1)
-    raise AssertionError("la UI no llegó al estado esperado")
+    extra = f"\n{detail()}" if detail else ""
+    raise AssertionError(f"la UI no llegó al estado esperado: {what}{extra}")
 
 
 async def _on(pilot: Any, app: EcusdkApp, kind: type[S]) -> S:
-    """Espera a que la pantalla activa sea ``kind`` y esté montada por completo."""
-    await _until(
-        pilot,
-        lambda: (
-            isinstance(app.screen, kind)
-            and (kind is ConfirmScreen or bool(app.screen.query("#next")))
-        ),
-    )
+    """Espera a que la pantalla activa sea ``kind`` con todos sus widgets montados.
+
+    Que un widget exista en el DOM no significa que haya procesado ``Mount``:
+    RadioSet, por ejemplo, normaliza sus botones en ``_on_mount`` y pisa
+    cualquier cambio hecho antes. En CI lento esa ventana es visible.
+    """
+
+    def ready() -> bool:
+        screen = app.screen
+        return isinstance(screen, kind) and all(
+            node.is_mounted for node in screen.walk_children(Widget, with_self=True)
+        )
+
+    await _until(pilot, ready, f"pantalla {kind.__name__}")
     return cast(S, app.screen)
+
+
+async def _click(pilot: Any, selector: str) -> None:
+    """Clic que falla claro si no cae sobre el widget (layout o scroll)."""
+    assert await pilot.click(selector), f"el clic no cayó en {selector}"
 
 
 def _car(tmp_path: Path) -> Path:
@@ -141,14 +159,14 @@ def test_cars_new_copy_delete(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -
             assert "Crear" in str(card.content)
             await pilot.press("enter")
             await _on(pilot, app, CustomizeScreen)
-            await pilot.click("#next")
+            await _click(pilot, "#next")
             assert await _on(pilot, app, CarsScreen) is cars
             assert load_vehicle(home / "mi-auto.toml").name == "Mi auto"
             await pilot.press("c")
             await _until(pilot, (home / "mi-auto-copia.toml").exists)
             await pilot.press("d")
             await _on(pilot, app, ConfirmScreen)
-            await pilot.click("#yes")
+            await _click(pilot, "#yes")
             await _until(pilot, lambda: not (home / "mi-auto-copia.toml").exists())
             (home / "roto.toml").write_text("[vehicle]\n")
             cars.reload(home / "roto.toml")
@@ -208,7 +226,7 @@ def test_customize_example_edits_a_copy(
             await pilot.press("p")
             screen = await _on(pilot, app, CustomizeScreen)
             screen.query_one("#value-0", Input).value = "1234"
-            await pilot.click("#next")
+            await _click(pilot, "#next")
             await _on(pilot, app, CarsScreen)
 
     asyncio.run(scenario())
@@ -227,7 +245,7 @@ def test_advanced_editor(tmp_path: Path) -> None:
             await _on(pilot, app, CarsScreen)
             await pilot.press("p")
             await _on(pilot, app, CustomizeScreen)
-            await pilot.click("#advanced")
+            await _click(pilot, "#advanced")
             editor = await _on(pilot, app, EditorScreen)
             tree = cast(Tree[Any], editor.query_one("#tree", Tree))
             value = editor.query_one("#value", Input)
@@ -244,7 +262,7 @@ def test_advanced_editor(tmp_path: Path) -> None:
             await select(rpm)
             await _until(pilot, lambda: value.value == "850")
             value.value = "3000"
-            await pilot.click("#apply")
+            await _click(pilot, "#apply")
             await _until(
                 pilot,
                 lambda: (
@@ -254,7 +272,7 @@ def test_advanced_editor(tmp_path: Path) -> None:
             await select(signals)
             editor.query_one("#key", Input).value = "temp"
             value.value = "{ initial = 90 }"
-            await pilot.click("#add")
+            await _click(pilot, "#add")
             await _until(
                 pilot, lambda: "temp" in editor.document["ecus"]["ecm"]["signals"]
             )
@@ -277,7 +295,7 @@ def test_wizard_launches_and_controls(tmp_path: Path) -> None:
         app = EcusdkApp([DEMO], home=tmp_path)
         async with app.run_test(size=(130, 44)) as pilot:
             await _on(pilot, app, CarsScreen)
-            await pilot.click("#next")
+            await _click(pilot, "#next")
             connection = await _on(pilot, app, ConnectionScreen)
             await _until(pilot, lambda: connection.query("#port"))  # en Collapsible
             assert connection.query_one("#port", Input).border_title
@@ -291,14 +309,19 @@ def test_wizard_launches_and_controls(tmp_path: Path) -> None:
             connection.action_next()
             summary = await _on(pilot, app, SummaryScreen)
             assert "demo-car" in str(summary.query_one("#summary", Static).content)
-            await pilot.click("#next")
+            await _click(pilot, "#next")
             dash = await _on(pilot, app, DashboardScreen)
             table = cast(DataTable[str], dash.query_one("#signals", DataTable))
-            await _until(pilot, lambda: table.row_count == 2)
+            await _until(
+                pilot,
+                lambda: table.row_count == 2,
+                "dos sensores en la tabla",
+                lambda: f"log={dash.log_view.lines}",
+            )
             dash.query_one("#new-value", Input).value = "4000"
-            await pilot.click("#set-value")
-            await pilot.click("#dtc-add")
-            await pilot.click("#pause")
+            await _click(pilot, "#set-value")
+            await _click(pilot, "#dtc-add")
+            await _click(pilot, "#pause")
             problems = dash.query_one("#problems", Static)
             await _until(
                 pilot,
@@ -307,10 +330,12 @@ def test_wizard_launches_and_controls(tmp_path: Path) -> None:
                     and dash.live.state == "paused"
                     and ("ecm", "rpm", 4000, False) in dash.live.signals
                 ),
+                "set 4000, DTC P0300 y pausa reflejados en el panel",
+                lambda: f"live={dash.live}\nlog={dash.log_view.lines}",
             )
             process = dash.process
             assert process is not None
-            await pilot.click("#next")
+            await _click(pilot, "#next")
             await asyncio.wait_for(process.wait(), 10)
             banner = dash.query_one("#banner", Static)
             await _until(pilot, lambda: "detenida" in str(banner.content))
@@ -356,19 +381,19 @@ def test_ble_install(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         app = EcusdkApp([DEMO], home=tmp_path)
         async with app.run_test(size=(130, 40)) as pilot:
             await _on(pilot, app, CarsScreen)
-            await pilot.click("#next")
+            await _click(pilot, "#next")
             connection = await _on(pilot, app, ConnectionScreen)
             ble = connection.query_one("#ble", RadioButton)
             tcp = connection.query_one("#tcp", RadioButton)
             # Cancelar vuelve a Wi-Fi.
             ble.value = True  # emite RadioSet.Changed como un clic
             await _on(pilot, app, ConfirmScreen)
-            await pilot.click("#no")
+            await _click(pilot, "#no")
             await _until(pilot, lambda: app.screen is connection and tcp.value)
             # La instalación falla: aviso y vuelta a Wi-Fi.
             ble.value = True  # emite RadioSet.Changed como un clic
             await _on(pilot, app, ConfirmScreen)
-            await pilot.click("#yes")
+            await _click(pilot, "#yes")
             await _until(
                 pilot,
                 lambda: (
@@ -381,7 +406,7 @@ def test_ble_install(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
             install[0] = [sys.executable, "-c", f"open({str(marker)!r}, 'w')"]
             ble.value = True  # emite RadioSet.Changed como un clic
             await _on(pilot, app, ConfirmScreen)
-            await pilot.click("#yes")
+            await _click(pilot, "#yes")
             await _until(
                 pilot, lambda: app.screen is connection and connection.ble_ready
             )
@@ -417,7 +442,7 @@ def test_ble_denied_by_macos_offers_wifi(
             banner = dash.query_one("#banner", Static)
             await _until(pilot, lambda: no_ble.display)
             assert "Bluetooth" in str(banner.content)
-            await pilot.click("#no-ble")
+            await _click(pilot, "#no-ble")
             await _until(pilot, lambda: "cerró sola" in str(banner.content))
             assert not app.setup.ble and not no_ble.display
 

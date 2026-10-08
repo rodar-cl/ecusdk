@@ -965,6 +965,7 @@ class DashboardScreen(Step):
         self.gone = False
         self.keys: list[str] = []
         self.live = Live("", [], [], [])
+        self.shell_lock = asyncio.Lock()  # FIFO: los comandos salen en orden
         self.log_view = Log(
             id="log"
         )  # referencia directa: vive dentro de un Collapsible
@@ -1190,13 +1191,18 @@ class DashboardScreen(Step):
             return
         self.send(line, self.setup.control)
 
-    @work(thread=True)
-    def send(self, line: str, port: int) -> None:
-        try:
-            response = send_command("127.0.0.1", port, line, timeout=1.0)
-        except OSError as error:
-            response = f"ERROR: sin conexión: {error}"
-        self.app.call_from_thread(self.answered, line, response)
+    @work
+    async def send(self, line: str, port: int) -> None:
+        # De a uno y en el orden en que se pidieron: "set" y luego "pause"
+        # deben llegar así al shell. Enviarlos en hilos sueltos los reordenaba.
+        async with self.shell_lock:
+            try:
+                response = await asyncio.to_thread(
+                    send_command, "127.0.0.1", port, line, timeout=5.0
+                )
+            except OSError as error:
+                response = f"ERROR: sin conexión: {error}"
+        self.answered(line, response)
 
     def answered(self, line: str, response: str) -> None:
         if self.gone:
