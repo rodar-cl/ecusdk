@@ -320,17 +320,24 @@ def test_wizard_launches_and_controls(tmp_path: Path) -> None:
             )
             dash.query_one("#new-value", Input).value = "4000"
             await _click(pilot, "#set-value")
-            await _click(pilot, "#dtc-add")
-            await _click(pilot, "#pause")
+            await _click(pilot, "#dtc-add")  # en orden tras el set, sin esperar
             problems = dash.query_one("#problems", Static)
             await _until(
                 pilot,
                 lambda: (
                     "P0300" in str(problems.content)
-                    and dash.live.state == "paused"
                     and ("ecm", "rpm", 4000, False) in dash.live.signals
                 ),
-                "set 4000, DTC P0300 y pausa reflejados en el panel",
+                "set 4000 y DTC P0300 reflejados en el panel",
+                lambda: f"live={dash.live}\nlog={dash.log_view.lines}",
+            )
+            # Con el panel ya redibujado: un clic calculado sobre un layout que
+            # cambia por una respuesta tardía cae en otro botón (visto en CI).
+            await _click(pilot, "#pause")
+            await _until(
+                pilot,
+                lambda: dash.live.state == "paused",
+                "vehículo en pausa",
                 lambda: f"live={dash.live}\nlog={dash.log_view.lines}",
             )
             process = dash.process

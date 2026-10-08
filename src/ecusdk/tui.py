@@ -1138,11 +1138,12 @@ class DashboardScreen(Step):
         else:
             for key, value in zip(keys, values, strict=True):
                 table.update_cell(key, "value", value)
-        problems = Text()
-        for code in live.dtcs:
-            problems.append(f"⚠ Código {code}\n", style="yellow")
-        for fault in live.faults:
-            problems.append(f"✗ Falla {fault}\n", style="red")
+        # Una línea por problema, sin salto final: el panel no cambia de alto
+        # (y no desplaza los botones) al pasar de "sin fallas" a una falla.
+        problems = Text("\n").join(
+            [Text(f"⚠ Código {code}", style="yellow") for code in live.dtcs]
+            + [Text(f"✗ Falla {fault}", style="red") for fault in live.faults]
+        )
         self.query_one("#problems", Static).update(
             problems or Text("Sin códigos ni fallas ✓", style="green")
         )
