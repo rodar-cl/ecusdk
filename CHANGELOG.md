@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Adaptador ELM327 por BLE con el extra opcional `ecusdk[ble]` (`bless`,
+  macOS/Linux): `ecusdk run --ble [--ble-name] [--ble-chunk]` y
+  `ecusdk.ble.serve_ble`. GATT `0BDA`/`0BDB`/`0BDC`, notificaciones troceadas
+  a 20 bytes por defecto. El núcleo sigue sin dependencias.
 - Grabación de sesiones en `.eculog` v1 (JSON Lines, documentado en
   `docs/recording.md`): frames de buses virtuales, peticiones y respuestas
   OBD/UDS reensambladas, señales, DTCs, fallos, eventos de escenario y

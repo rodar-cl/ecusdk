@@ -25,6 +25,9 @@ classifiers = [
 
 dependencies = []
 
+[project.optional-dependencies]
+ble = ["bless>=0.3; sys_platform != 'win32'"]
+
 [project.scripts]
 ecusdk = "ecusdk.cli:main"
 

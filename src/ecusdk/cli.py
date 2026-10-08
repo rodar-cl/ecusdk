@@ -3,13 +3,15 @@
 from __future__ import annotations
 
 import argparse
+import asyncio
 import signal
 import threading
 
+from ecusdk.ble import serve_ble
 from ecusdk.can import CanFrame, SocketCanBus
 from ecusdk.config import load_vehicle
 from ecusdk.elm327 import Elm327Emulator, TcpServer
-from ecusdk.errors import RecordingError
+from ecusdk.errors import AdapterError, RecordingError
 from ecusdk.recording import (
     Record,
     Recorder,
@@ -46,6 +48,13 @@ def main(argv: list[str] | None = None) -> int:
     )
     run.add_argument("--once", action="store_true", help="no iniciar el servidor")
     run.add_argument("--record", default=None, help="grabar la sesión en un .eculog")
+    run.add_argument(
+        "--ble", action="store_true", help="anunciar además un ELM327 BLE (ecusdk[ble])"
+    )
+    run.add_argument("--ble-name", default="OBDII ecusdk", help="nombre BLE anunciado")
+    run.add_argument(
+        "--ble-chunk", type=int, default=20, help="bytes por notificación BLE"
+    )
     replay_parser = commands.add_parser("replay", help="reproducir un .eculog")
     replay_parser.add_argument("log")
     replay_parser.add_argument(
@@ -155,13 +164,24 @@ def _serve(args: argparse.Namespace, vehicle: Vehicle) -> int:
         threading.Thread(target=servers[1].serve_forever, daemon=True).start()
         print(f"control: {args.host}:{args.control_port}")
     print(f"ELM327: {args.host}:{args.port}")
+    if args.ble:
+        threading.Thread(target=servers[0].serve_forever, daemon=True).start()
+        print(f"BLE: {args.ble_name}")
     # SIGTERM (docker stop, systemd) cierra igual que Ctrl+C: servidores,
     # vehículo y grabación terminan de forma ordenada.
     previous = signal.signal(signal.SIGTERM, _interrupt)
     try:
-        servers[0].serve_forever()
+        if args.ble:
+            asyncio.run(
+                serve_ble(Elm327Emulator(vehicle), args.ble_name, args.ble_chunk)
+            )
+        else:
+            servers[0].serve_forever()
     except KeyboardInterrupt:
         pass
+    except AdapterError as error:
+        print(f"ecusdk: {error}")
+        return 1
     finally:
         signal.signal(signal.SIGTERM, previous)
         for server in servers:

@@ -81,6 +81,17 @@ ecusdk shell                     # sesión interactiva con los mismos comandos
 ecusdk run examples/demo-car.toml --request "01 0D"
 ```
 
+### Adaptador BLE (opcional)
+
+Para probar apps móviles que hablan con adaptadores ELM327 por Bluetooth Low Energy, instala el extra `ble` (macOS y Linux; usa [bless](https://github.com/kevincar/bless)) y añade `--ble`:
+
+```bash
+pip install 'ecusdk[ble]'
+ecusdk run examples/demo-car.toml --ble
+```
+
+Se anuncia como `OBDII ecusdk` (`--ble-name`) con el GATT habitual de estos adaptadores: servicio `0BDA`, escritura en `0BDB` y notificaciones en `0BDC`. El servidor TCP sigue activo en paralelo. Las respuestas se notifican en trozos de 20 bytes (`--ble-chunk`), como un adaptador real sin MTU negociado, de modo que la app debe acumular notificaciones hasta el prompt `>`. Hace falta un teléfono físico: los simuladores de iOS y Android no tienen Bluetooth. En macOS, la terminal desde la que se ejecuta necesita permiso en *Ajustes del Sistema → Privacidad y seguridad → Bluetooth*; sin él, macOS cierra el proceso.
+
 ## Métricas
 
 Medido sobre `main` con `uv run pytest --cov=ecusdk`.
