@@ -593,21 +593,27 @@ class CustomizeScreen(Step):
 
     @on(Select.Changed, ".add")
     async def add_sensor(self, event: Select.Changed) -> None:
-        if not isinstance(event.value, str) or event.select.id is None:
-            return
+        if isinstance(event.value, str) and event.select.id is not None:
+            await self.add(int(event.select.id.removeprefix("add-")), event.value)
+
+    async def add(self, module: int, sensor: str) -> None:
+        """Agrega ``sensor`` del catálogo OBD al módulo ``module``."""
         self.sync()
-        ecu = self.modules[int(event.select.id.removeprefix("add-"))]
-        codec = CATALOG[event.value]
-        data = cast(dict[str, Any], self._ecus()[ecu])
-        data["signals"][event.value] = {"initial": max(codec.minimum, 0)}
-        data.setdefault("obd", {})[f"01:{codec.identifier:02X}"] = event.value
+        codec = CATALOG[sensor]
+        data = cast(dict[str, Any], self._ecus()[self.modules[module]])
+        data["signals"][sensor] = {"initial": max(codec.minimum, 0)}
+        data.setdefault("obd", {})[f"01:{codec.identifier:02X}"] = sensor
         await self.recompose()
 
     @on(Button.Pressed, ".small")
     async def drop_sensor(self, event: Button.Pressed) -> None:
         assert event.button.id is not None
+        await self.drop(int(event.button.id.removeprefix("drop-")))
+
+    async def drop(self, row: int) -> None:
+        """Quita el sensor de la fila ``row`` y lo que lo referencia."""
         self.sync()
-        ecu, signal = self.rows[int(event.button.id.removeprefix("drop-"))]
+        ecu, signal = self.rows[row]
         data = cast(dict[str, Any], self._ecus()[ecu])
         del data["signals"][signal]
         obd = cast(dict[str, Any], data.get("obd", {}))
@@ -770,6 +776,7 @@ class ConnectionScreen(Step):
     STEP = 1
     HEADING = "¿Cómo se conecta tu app?"
     HINT = "Tu app (o escáner) verá al auto simulado como un adaptador OBD-II ELM327."
+    ble_ready: bool | None = None  # resultado de la última instalación de bless
     MODE_HELP: ClassVar[dict[str, str]] = {
         "tcp": (
             "Como un adaptador ELM327 Wi-Fi. Sirve para Torque, Car Scanner o tu "
@@ -854,6 +861,7 @@ class ConnectionScreen(Step):
         next_button = self.query_one("#next", Button)
         help_text.update(Text("Instalando soporte Bluetooth… (puede tardar un poco)"))
         next_button.disabled = True
+        self.ble_ready = None
         try:
             process = await asyncio.create_subprocess_exec(
                 *ble_install_argv(),
@@ -865,6 +873,7 @@ class ConnectionScreen(Step):
         except OSError as error:
             output, ok = str(error).encode(), False
         next_button.disabled = False
+        self.ble_ready = ok
         if ok:
             help_text.update(Text(self.MODE_HELP["ble"]))
             self.notify("Bluetooth listo ✓")

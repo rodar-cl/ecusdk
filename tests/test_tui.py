@@ -1,27 +1,29 @@
+"""Tests del asistente ``ecusdk tui``.
+
+Los runners de CI (sobre todo Windows) son lentos: nunca se asume que un clic
+o un cambio de pantalla ya se procesó. ``_on`` espera a que una pantalla esté
+activa y montada, y ``_until`` espera un estado concreto. Las acciones que se
+repiten sobre el mismo botón se llaman directamente para no chocar con el
+anti-rebote de ``Button``.
+"""
+
 import asyncio
 import shutil
 import socket
 import sys
 from collections.abc import Callable
 from pathlib import Path
-from typing import Any, cast
+from typing import Any, TypeVar, cast
 
 import pytest
-from textual.widgets import (
-    Checkbox,
-    DataTable,
-    Input,
-    Log,
-    RadioButton,
-    Select,
-    Static,
-    Tree,
-)
+from textual.screen import Screen
+from textual.widgets import Checkbox, DataTable, Input, Log, RadioButton, Static, Tree
 
 from ecusdk.cli import main
 from ecusdk.config import load_vehicle
 from ecusdk.tui import (
     CarsScreen,
+    ConfirmScreen,
     ConnectionScreen,
     CustomizeScreen,
     DashboardScreen,
@@ -35,6 +37,7 @@ from ecusdk.tui import (
 )
 
 DEMO = Path(__file__).parent.parent / "examples" / "demo-car.toml"
+S = TypeVar("S", bound=Screen[Any])
 
 
 def _free_port() -> int:
@@ -43,19 +46,35 @@ def _free_port() -> int:
         return sock.getsockname()[1]
 
 
-async def _until(pilot: Any, condition: Callable[[], bool]) -> None:
-    """Espera una condición de la UI (CI lento, recompose asíncrono)."""
-    for _ in range(100):
+async def _until(pilot: Any, condition: Callable[[], object]) -> None:
+    """Espera hasta 15 s a que ``condition`` sea verdadera."""
+    for _ in range(150):
         if condition():
             return
         await pilot.pause(0.1)
     raise AssertionError("la UI no llegó al estado esperado")
 
 
+async def _on(pilot: Any, app: EcusdkApp, kind: type[S]) -> S:
+    """Espera a que la pantalla activa sea ``kind`` y esté montada por completo."""
+    await _until(
+        pilot,
+        lambda: (
+            isinstance(app.screen, kind)
+            and (kind is ConfirmScreen or bool(app.screen.query("#next")))
+        ),
+    )
+    return cast(S, app.screen)
+
+
 def _car(tmp_path: Path) -> Path:
     path = tmp_path / "car.toml"
     shutil.copyfile(DEMO, path)
     return path
+
+
+def _walk(node: Any) -> list[Any]:
+    return [node, *(found for child in node.children for found in _walk(child))]
 
 
 def test_parse_value() -> None:
@@ -117,30 +136,26 @@ def test_cars_new_copy_delete(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -
     async def scenario() -> None:
         app = EcusdkApp([], home=home)
         async with app.run_test(size=(130, 40)) as pilot:
-            cars = app.screen
-            assert isinstance(cars, CarsScreen)
-            assert "Crear" in str(cars.query_one("#card", Static).content)
+            cars = await _on(pilot, app, CarsScreen)
+            card = cars.query_one("#card", Static)
+            assert "Crear" in str(card.content)
             await pilot.press("enter")
-            await pilot.pause()
-            assert isinstance(app.screen, CustomizeScreen)
+            await _on(pilot, app, CustomizeScreen)
             await pilot.click("#next")
-            await pilot.pause()
-            assert app.screen is cars
+            assert await _on(pilot, app, CarsScreen) is cars
             assert load_vehicle(home / "mi-auto.toml").name == "Mi auto"
             await pilot.press("c")
-            assert (home / "mi-auto-copia.toml").exists()
+            await _until(pilot, (home / "mi-auto-copia.toml").exists)
             await pilot.press("d")
+            await _on(pilot, app, ConfirmScreen)
             await pilot.click("#yes")
-            assert not (home / "mi-auto-copia.toml").exists()
+            await _until(pilot, lambda: not (home / "mi-auto-copia.toml").exists())
             (home / "roto.toml").write_text("[vehicle]\n")
             cars.reload(home / "roto.toml")
-            await pilot.pause()
-            assert "problema" in str(cars.query_one("#card", Static).content)
-            await pilot.click("#next")
-            await pilot.pause()
+            await _until(pilot, lambda: "problema" in str(card.content))
+            cars.action_next()  # un auto con errores no avanza
             assert app.screen is cars
             await pilot.press("escape")
-            await pilot.pause()
 
     asyncio.run(scenario())
 
@@ -151,35 +166,20 @@ def test_customize_edits_adds_and_drops(tmp_path: Path) -> None:
     async def scenario() -> None:
         app = EcusdkApp([path], home=tmp_path / "home")
         async with app.run_test(size=(130, 40)) as pilot:
+            await _on(pilot, app, CarsScreen)
             await pilot.press("p")
-            await pilot.pause()
-            screen = app.screen
-            assert isinstance(screen, CustomizeScreen)
+            screen = await _on(pilot, app, CustomizeScreen)
             screen.query_one("#name", Input).value = "Mi demo"
             screen.query_one("#value-0", Input).value = "3000"
-            cast(Select[str], screen.query_one("#add-0", Select)).value = "fuel_level"
-            # recompose borra y vuelve a montar todo: esperar la pantalla completa
-            await _until(
-                pilot, lambda: bool(screen.query("#drop-2") and screen.query("#next"))
-            )
-            await pilot.click("#drop-1")  # speed
-            await _until(
-                pilot,
-                lambda: bool(
-                    screen.query("#drop-1")
-                    and not screen.query("#drop-2")
-                    and screen.query("#next")
-                ),
-            )
+            await screen.add(0, "fuel_level")
+            await screen.drop(1)  # speed
+            assert [signal for _, signal in screen.rows] == ["rpm", "fuel_level"]
             screen.query_one("#value-0", Input).value = "abc"
-            await pilot.click("#next")
-            await pilot.pause()
-            assert app.screen is screen
-            await pilot.pause(0.3)  # el botón ignora clics durante su animación
+            screen.action_next()
+            assert app.screen is screen  # valor inválido: no guarda ni sale
             screen.query_one("#value-0", Input).value = "3000"
-            await pilot.click("#next")
-            await pilot.pause()
-            assert isinstance(app.screen, CarsScreen)
+            screen.action_next()
+            await _on(pilot, app, CarsScreen)
         vehicle = load_vehicle(path)
         ecm = vehicle.ecu("ecm")
         assert vehicle.name == "Mi demo"
@@ -190,40 +190,76 @@ def test_customize_edits_adds_and_drops(tmp_path: Path) -> None:
     asyncio.run(scenario())
 
 
-def _walk(node: Any) -> list[Any]:
-    return [node, *(found for child in node.children for found in _walk(child))]
+def test_customize_example_edits_a_copy(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Personalizar un ejemplo no lo reescribe: trabaja sobre una copia en home."""
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "examples").mkdir()
+    example = tmp_path / "examples" / "demo-car.toml"
+    shutil.copyfile(DEMO, example)
+    original = example.read_text()
+    home = tmp_path / "home"
+
+    async def scenario() -> None:
+        app = EcusdkApp([], home=home)
+        async with app.run_test(size=(130, 40)) as pilot:
+            await _on(pilot, app, CarsScreen)
+            await pilot.press("p")
+            screen = await _on(pilot, app, CustomizeScreen)
+            screen.query_one("#value-0", Input).value = "1234"
+            await pilot.click("#next")
+            await _on(pilot, app, CarsScreen)
+
+    asyncio.run(scenario())
+    assert example.read_text() == original
+    assert load_vehicle(home / "demo-car.toml").ecu("ecm").get_signal("rpm") == 1234
 
 
 def test_advanced_editor(tmp_path: Path) -> None:
     path = _car(tmp_path)
+    rpm = ("ecus", "ecm", "signals", "rpm", "initial")
+    signals = ("ecus", "ecm", "signals")
 
     async def scenario() -> None:
         app = EcusdkApp([path], home=tmp_path / "home")
         async with app.run_test(size=(130, 40)) as pilot:
+            await _on(pilot, app, CarsScreen)
             await pilot.press("p")
-            await pilot.pause()
+            await _on(pilot, app, CustomizeScreen)
             await pilot.click("#advanced")
-            await pilot.pause()
-            editor = app.screen
-            assert isinstance(editor, EditorScreen)
+            editor = await _on(pilot, app, EditorScreen)
             tree = cast(Tree[Any], editor.query_one("#tree", Tree))
-            nodes = {node.data: node for node in _walk(tree.root)}
-            tree.move_cursor(nodes[("ecus", "ecm", "signals", "rpm", "initial")])
-            await pilot.pause()
-            assert editor.query_one("#value", Input).value == "850"
-            editor.query_one("#value", Input).value = "3000"
+            value = editor.query_one("#value", Input)
+
+            def select(path: tuple[Any, ...]) -> None:
+                # El árbol se reconstruye tras cada cambio: buscar el nodo actual.
+                tree.move_cursor(next(n for n in _walk(tree.root) if n.data == path))
+
+            select(rpm)
+            await _until(pilot, lambda: editor.selected == rpm and value.value == "850")
+            value.value = "3000"
             await pilot.click("#apply")
-            tree.move_cursor(nodes[("ecus", "ecm", "signals")])
-            await pilot.pause()
+            await _until(
+                pilot,
+                lambda: (
+                    editor.document["ecus"]["ecm"]["signals"]["rpm"]["initial"] == 3000
+                ),
+            )
+            select(signals)
+            await _until(pilot, lambda: editor.selected == signals)
             editor.query_one("#key", Input).value = "temp"
-            editor.query_one("#value", Input).value = "{ initial = 90 }"
+            value.value = "{ initial = 90 }"
             await pilot.click("#add")
-            await pilot.press("ctrl+s")
+            await _until(
+                pilot, lambda: "temp" in editor.document["ecus"]["ecm"]["signals"]
+            )
+            editor.action_next()
             ecm = load_vehicle(path).ecu("ecm")
             assert ecm.get_signal("rpm") == 3000
             assert ecm.get_signal("temp") == 90
             editor.document["ecus"]["ecm"]["can"]["request_id"] = "bad"
-            await pilot.press("ctrl+s")
+            editor.action_next()
             assert "no guardado" in str(editor.query_one("#status", Static).content)
             assert load_vehicle(path).ecu("ecm").request_id == 0x7E0
 
@@ -231,111 +267,53 @@ def test_advanced_editor(tmp_path: Path) -> None:
 
 
 def test_wizard_launches_and_controls(tmp_path: Path) -> None:
+    record = tmp_path / "s.eculog"
+
     async def scenario() -> None:
         app = EcusdkApp([DEMO], home=tmp_path)
         async with app.run_test(size=(130, 44)) as pilot:
+            await _on(pilot, app, CarsScreen)
             await pilot.click("#next")
-            await pilot.pause()
-            connection = app.screen
-            assert isinstance(connection, ConnectionScreen)
+            connection = await _on(pilot, app, ConnectionScreen)
             connection.query_one("#port", Input).value = "x"
-            await pilot.click("#next")
-            await pilot.pause()
-            assert app.screen is connection
-            await pilot.pause(0.3)
+            connection.action_next()
+            assert app.screen is connection  # puerto inválido
             connection.query_one("#port", Input).value = str(_free_port())
             connection.query_one("#control", Input).value = str(_free_port())
             connection.query_one("#record", Checkbox).value = True
-            record = tmp_path / "s.eculog"
             connection.query_one("#record-path", Input).value = str(record)
+            connection.action_next()
+            summary = await _on(pilot, app, SummaryScreen)
+            assert "demo-car" in str(summary.query_one("#summary", Static).content)
             await pilot.click("#next")
-            await pilot.pause()
-            assert isinstance(app.screen, SummaryScreen)
-            assert "demo-car" in str(app.screen.query_one("#summary", Static).content)
-            await pilot.click("#next")
-            await pilot.pause()
-            dash = app.screen
-            assert isinstance(dash, DashboardScreen)
+            dash = await _on(pilot, app, DashboardScreen)
             table = cast(DataTable[str], dash.query_one("#signals", DataTable))
-            for _ in range(50):
-                await pilot.pause(0.2)
-                if table.row_count:
-                    break
-            assert table.row_count == 2
+            await _until(pilot, lambda: table.row_count == 2)
             dash.query_one("#new-value", Input).value = "4000"
             await pilot.click("#set-value")
             await pilot.click("#dtc-add")
             await pilot.click("#pause")
             problems = dash.query_one("#problems", Static)
-            for _ in range(25):
-                await pilot.pause(0.2)
-                if "P0300" in str(problems.content) and dash.live.state == "paused":
-                    break
-            assert "P0300" in str(problems.content)
-            assert ("ecm", "rpm", 4000, False) in dash.live.signals
+            await _until(
+                pilot,
+                lambda: (
+                    "P0300" in str(problems.content)
+                    and dash.live.state == "paused"
+                    and ("ecm", "rpm", 4000, False) in dash.live.signals
+                ),
+            )
             process = dash.process
             assert process is not None
             await pilot.click("#next")
-            await pilot.pause()
             await asyncio.wait_for(process.wait(), 10)
-            await pilot.pause(0.5)
-            assert "detenida" in str(dash.query_one("#banner", Static).content)
+            banner = dash.query_one("#banner", Static)
+            await _until(pilot, lambda: "detenida" in str(banner.content))
             assert "4000" in "\n".join(dash.query_one(Log).lines)
             await pilot.press("escape")
-            await pilot.pause()
-            assert isinstance(app.screen, CarsScreen)
-        assert record.exists()
+            await _on(pilot, app, CarsScreen)
 
     asyncio.run(scenario())
-
-
-def test_ble_install(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    installed: list[bool] = [False]
-    monkeypatch.setattr("ecusdk.tui.WINDOWS", False)
-    monkeypatch.setattr("ecusdk.tui.ble_available", lambda: installed[0])
-    code = "import sys; print('sin red'); sys.exit(1)"
-    monkeypatch.setattr(
-        "ecusdk.tui.ble_install_argv", lambda: [sys.executable, "-c", code]
-    )
-
-    async def scenario() -> None:
-        app = EcusdkApp([DEMO], home=tmp_path)
-        async with app.run_test(size=(130, 40)) as pilot:
-            await pilot.click("#next")
-            await pilot.pause()
-            connection = app.screen
-            assert isinstance(connection, ConnectionScreen)
-            ble = connection.query_one("#ble", RadioButton)
-            tcp = connection.query_one("#tcp", RadioButton)
-            # Cancelar vuelve a Wi-Fi.
-            await pilot.click("#ble")
-            await _until(pilot, lambda: bool(app.screen.query("#no")))
-            await pilot.click("#no")
-            await _until(pilot, lambda: tcp.value)
-            # Falla de instalación: aviso y vuelta a Wi-Fi.
-            await pilot.click("#ble")
-            await _until(pilot, lambda: bool(app.screen.query("#yes")))
-            await pilot.click("#yes")
-            await _until(pilot, lambda: tcp.value)
-            # Instalación correcta: queda en Bluetooth.
-            monkeypatch.setattr(
-                "ecusdk.tui.ble_install_argv",
-                lambda: [sys.executable, "-c", "pass"],
-            )
-            monkeypatch.setattr("ecusdk.tui.ble_available", lambda: installed[-1])
-            installed.append(False)
-            await pilot.click("#ble")
-            await _until(pilot, lambda: bool(app.screen.query("#yes")))
-            installed.append(True)
-            await pilot.click("#yes")
-            await _until(pilot, lambda: not connection.query_one("#next").disabled)
-            await pilot.pause(0.2)
-            assert ble.value
-            await pilot.click("#next")
-            await pilot.pause()
-            assert connection.setup.ble
-
-    asyncio.run(scenario())
+    assert record.exists()
 
 
 def test_leave_dashboard_while_running(tmp_path: Path) -> None:
@@ -343,21 +321,68 @@ def test_leave_dashboard_while_running(tmp_path: Path) -> None:
 
     async def scenario() -> None:
         app = EcusdkApp([DEMO], home=tmp_path)
+        app.setup.path = DEMO.resolve()
         app.setup.port, app.setup.control = _free_port(), _free_port()
         async with app.run_test(size=(130, 44)) as pilot:
-            app.setup.path = DEMO.resolve()
+            await _on(pilot, app, CarsScreen)
             app.push_screen(DashboardScreen())
-            await pilot.pause()
-            dash = app.screen
-            assert isinstance(dash, DashboardScreen)
-            await _until(pilot, lambda: dash.process is not None)
-            await _until(pilot, lambda: bool(dash.live.signals))
+            dash = await _on(pilot, app, DashboardScreen)
+            await _until(pilot, lambda: dash.process is not None and dash.live.signals)
             process = dash.process
             assert process is not None
             await pilot.press("escape")
             await asyncio.wait_for(process.wait(), 10)
-            await pilot.pause(0.5)
-            assert isinstance(app.screen, CarsScreen)
+            await _on(pilot, app, CarsScreen)
+            await pilot.pause(0.5)  # el worker termina después de salir
+
+    asyncio.run(scenario())
+
+
+def test_ble_install(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Elegir Bluetooth sin ``bless`` ofrece instalarlo; si falla vuelve a Wi-Fi."""
+    marker = tmp_path / "bless-instalado"
+    monkeypatch.setattr("ecusdk.tui.WINDOWS", False)
+    monkeypatch.setattr("ecusdk.tui.ble_available", marker.exists)
+    install = [[sys.executable, "-c", "import sys; print('sin red'); sys.exit(1)"]]
+    monkeypatch.setattr("ecusdk.tui.ble_install_argv", lambda: install[0])
+
+    async def scenario() -> None:
+        app = EcusdkApp([DEMO], home=tmp_path)
+        async with app.run_test(size=(130, 40)) as pilot:
+            await _on(pilot, app, CarsScreen)
+            await pilot.click("#next")
+            connection = await _on(pilot, app, ConnectionScreen)
+            ble = connection.query_one("#ble", RadioButton)
+            tcp = connection.query_one("#tcp", RadioButton)
+            # Cancelar vuelve a Wi-Fi.
+            await pilot.click("#ble")
+            await _on(pilot, app, ConfirmScreen)
+            await pilot.click("#no")
+            await _until(pilot, lambda: app.screen is connection and tcp.value)
+            # La instalación falla: aviso y vuelta a Wi-Fi.
+            await pilot.click("#ble")
+            await _on(pilot, app, ConfirmScreen)
+            await pilot.click("#yes")
+            await _until(
+                pilot,
+                lambda: (
+                    app.screen is connection
+                    and connection.ble_ready is False
+                    and tcp.value
+                ),
+            )
+            # La instalación funciona: queda en Bluetooth.
+            install[0] = [sys.executable, "-c", f"open({str(marker)!r}, 'w')"]
+            await pilot.click("#ble")
+            await _on(pilot, app, ConfirmScreen)
+            await pilot.click("#yes")
+            await _until(
+                pilot, lambda: app.screen is connection and connection.ble_ready
+            )
+            assert ble.value
+            connection.action_next()
+            await _on(pilot, app, SummaryScreen)
+            assert app.setup.ble
 
     asyncio.run(scenario())
 
@@ -379,43 +404,15 @@ def test_ble_denied_by_macos_offers_wifi(
         app = EcusdkApp([DEMO], home=tmp_path)
         app.setup.path, app.setup.ble = DEMO.resolve(), True
         async with app.run_test(size=(130, 44)) as pilot:
+            await _on(pilot, app, CarsScreen)
             app.push_screen(DashboardScreen())
-            await pilot.pause()
-            dash = app.screen
-            assert isinstance(dash, DashboardScreen)
+            dash = await _on(pilot, app, DashboardScreen)
             no_ble = dash.query_one("#no-ble")
-            await _until(pilot, lambda: no_ble.display)
             banner = dash.query_one("#banner", Static)
+            await _until(pilot, lambda: no_ble.display)
             assert "Bluetooth" in str(banner.content)
             await pilot.click("#no-ble")
             await _until(pilot, lambda: "cerró sola" in str(banner.content))
             assert not app.setup.ble and not no_ble.display
 
     asyncio.run(scenario())
-
-
-def test_customize_example_edits_a_copy(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """Personalizar un ejemplo no lo reescribe: trabaja sobre una copia en home."""
-    monkeypatch.chdir(tmp_path)
-    (tmp_path / "examples").mkdir()
-    example = tmp_path / "examples" / "demo-car.toml"
-    shutil.copyfile(DEMO, example)
-    original = example.read_text()
-    home = tmp_path / "home"
-
-    async def scenario() -> None:
-        app = EcusdkApp([], home=home)
-        async with app.run_test(size=(130, 40)) as pilot:
-            await pilot.press("p")
-            screen = app.screen
-            assert isinstance(screen, CustomizeScreen)
-            await _until(pilot, lambda: bool(screen.query("#next")))
-            screen.query_one("#value-0", Input).value = "1234"
-            await pilot.click("#next")
-            await _until(pilot, lambda: isinstance(app.screen, CarsScreen))
-
-    asyncio.run(scenario())
-    assert example.read_text() == original
-    assert load_vehicle(home / "demo-car.toml").ecu("ecm").get_signal("rpm") == 1234
