@@ -129,7 +129,7 @@ def serve_lines(transport: ByteTransport, handler: Callable[[str], str]) -> None
         transport.close()
 
 
-_OBD_QUERY = re.compile(r"(?:[0-9A-F]{2}){1,7}")
+_REQUEST = re.compile(r"(?:[0-9A-F]{2}){1,7}")
 _NO_OP_AT = re.compile(r"AT(?:L[01]|AT[0-2]|M[01]|CAF[01]|ST[0-9A-F]{2}|AL|NL)")
 
 
@@ -190,7 +190,7 @@ class Elm327Emulator:
             return "OK\r\r>"
         if _NO_OP_AT.fullmatch(text):
             return "OK\r\r>"
-        if _OBD_QUERY.fullmatch(text) and 0x01 <= int(text[:2], 16) <= 0x0A:
+        if _REQUEST.fullmatch(text):
             return self._query(bytes.fromhex(text))
         return "?\r\r>"
 

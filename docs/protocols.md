@@ -187,3 +187,52 @@ y Mode 09 PID 02 (VIN de 17 caracteres desde TOML). `DtcStore` mantiene los
 códigos de cada ECU y permite añadir, eliminar, listar y limpiar. Las pruebas
 incluyen vectores conocidos y propiedades de round-trip para CAN, ISO-TP,
 PID y DTC.
+
+## UDS (ISO 14229-1)
+
+Cada `ECU` tiene un `UdsServer` en `ecu.uds`. Las peticiones con SID mayor
+que 0x0A van a UDS; las demás, a OBD-II. Así funcionan por ISO-TP, por el
+ELM327 (`22F190`) y por el shell (`request ECM 22 F1 90`).
+
+| Servicio | Sub-funciones | Respuesta positiva |
+| --- | --- | --- |
+| `0x10` DiagnosticSessionControl | `01` default, `02` programming, `03` extended | `50 <sub> 00 32 01 F4` (P2 50 ms, P2* 5 s) |
+| `0x11` ECUReset | `01` hard, `02` keyOffOn, `03` soft | `51 <sub>` |
+| `0x19` ReadDTCInformation | `01` count, `02` by status mask, `0A` supported | `59 <sub> 09 …` |
+| `0x22` ReadDataByIdentifier | uno o varios DIDs | `62 <DID> <datos> …` |
+| `0x3E` TesterPresent | `00` | `7E 00` |
+
+- El bit `0x80` (suppressPosRspMsgIndication) en 0x10, 0x11 y 0x3E suprime la
+  respuesta positiva. Las negativas se envían siempre.
+- Errores: `7F <SID> <NRC>` con 0x11 servicio no soportado, 0x12
+  sub-función no soportada, 0x13 longitud incorrecta, 0x14 respuesta mayor de
+  4095 bytes, 0x22 condiciones incorrectas (un `DidSignal` fuera de rango) y
+  0x31 DID desconocido. En 0x22, los DIDs desconocidos se omiten y sólo se
+  responde 0x31 si no se conoce ninguno.
+- Una sesión distinta de la default vuelve a default tras 5 s sin peticiones
+  (S3). Cualquier petición, incluido TesterPresent, reinicia ese timer.
+- Los DTCs se codifican en 3 bytes (los 2 de OBD más un failure type `00`)
+  con estado `0x09` (testFailed y confirmedDTC).
+- `ECUReset` hard o keyOffOn restaura las señales iniciales; soft sólo
+  reinicia la sesión. Los DTCs se conservan.
+
+Los DIDs se definen por API o TOML. `F190` toma el VIN del vehículo por
+defecto:
+
+```python
+from ecusdk import DidSignal
+
+ecu.uds.did(0xF18C, "SN-0001")  # texto ASCII
+ecu.uds.did(0x0100, b"\x01\x02")  # bytes
+ecu.uds.did(0x0101, DidSignal("rpm", length=2, scale=4))  # desde una señal
+```
+
+```toml
+[ecus.ecm.uds.dids]
+"0xF18C" = "SN-0001"
+"0x0100" = [1, 2]
+"0x0101" = { signal = "rpm", length = 2, scale = 4 }
+```
+
+Fuera de alcance por ahora: SecurityAccess (0x27), escritura de DIDs (0x2E),
+rutinas (0x31), transferencia de datos y respuestas pendientes (NRC 0x78).

@@ -1,5 +1,16 @@
 # Changelog
 
+## Unreleased
+
+- UDS (ISO 14229-1) propio en cada ECU (`ecu.uds`): 0x10, 0x11, 0x19
+  (0x01, 0x02, 0x0A), 0x22 y 0x3E, con suppressPosRspMsgIndication, NRCs,
+  timeout S3 y DIDs configurables por API o TOML (`[ecus.<ecu>.uds.dids]`),
+  incluidos `DidSignal` calculados desde señales. `F190` toma el VIN.
+- `ECU.diagnostic_payload` despacha OBD (SID ≤ 0x0A) o UDS.
+- ELM327 envía cualquier petición hexadecimal de 1 a 7 bytes; las peticiones
+  no soportadas reciben su respuesta negativa en vez de `?`.
+- Shell y CLI: `request ECU HEX`; `inspect` muestra los DIDs.
+
 ## 0.1.0 — 2026-10-08
 
 Primera versión con contrato de API probado. Cumple los criterios de

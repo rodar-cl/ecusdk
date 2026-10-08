@@ -11,7 +11,7 @@ from ecusdk.elm327 import Elm327Emulator, TcpServer
 from ecusdk.shell import VehicleShell, describe, send_command
 
 _CONTROL_PORT = 35001
-_REMOTE = ("get", "set", "dtc", "fault", "faults")
+_REMOTE = ("get", "set", "dtc", "fault", "faults", "request")
 
 
 def _remote_options(parser: argparse.ArgumentParser) -> None:

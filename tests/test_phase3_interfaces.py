@@ -148,7 +148,8 @@ def test_elm327_functional_and_physical_addressing() -> None:
     assert elm.command("0100").startswith("41 00 00 18 00 00\r")
     for command in ("ATL0", "ATST32", "ATAT1", "ATI"):
         assert elm.command(command) != "?\r\r>"
-    for command in ("0G", "ATSHXYZ", "FF00", "ATFOO"):
+    assert elm.command("FF00") == "7F FF 11\r7F FF 11\r\r>"
+    for command in ("0G", "ATSHXYZ", "ATFOO"):
         assert elm.command(command) == "?\r\r>"
     vehicle.inject_fault("malformed_frame", "ecm")
     vehicle.inject_fault("ecu_offline", "tcm")

@@ -13,6 +13,7 @@ import re
 import socket
 from collections.abc import Callable
 
+from ecusdk.can import CanFrame
 from ecusdk.elm327 import ByteTransport, serve_lines
 from ecusdk.errors import ECUSDKError
 from ecusdk.faults import FAULT_KINDS
@@ -29,6 +30,7 @@ fault ECU KIND [DURATION] [signal=S] [value=V] [delay=S] [probability=P]
       [sequence=N] [period=S]
 fault ECU clear [KIND]
 faults [ECU]
+request ECU HEX         (petición OBD/UDS, p. ej. request ECM 22 F1 90)
 pause | resume | reset
 help"""
 
@@ -72,6 +74,8 @@ def describe(vehicle: Vehicle) -> str:
             lines.append(f"    signal {signal} = {value:g}{driven}")
         for pid, source in sorted(ecu.obd.bindings().items()):
             lines.append(f"    pid 01:{pid:02X} -> {source}")
+        for did, value in sorted(ecu.uds.dids().items()):
+            lines.append(f"    did 0x{did:04X} = {value!r}")
         if ecu.dtcs.list():
             lines.append(f"    dtcs {' '.join(ecu.dtcs.list())}")
         for fault in vehicle.faults(ecu.name):
@@ -101,6 +105,7 @@ class VehicleShell:
             "dtc": self._dtc,
             "fault": self._fault,
             "faults": self._faults,
+            "request": self._request,
             "pause": lambda _: self._lifecycle(self.vehicle.pause),
             "resume": lambda _: self._lifecycle(self.vehicle.resume),
             "reset": lambda _: self._reset(),
@@ -209,6 +214,16 @@ class VehicleShell:
             )
             or "(none)"
         )
+
+    def _request(self, args: list[str]) -> str:
+        ecu = self.vehicle.ecu(args[0])
+        payload = bytes.fromhex("".join(args[1:]))
+        if not 1 <= len(payload) <= 7:
+            raise ValueError("la petición debe tener entre 1 y 7 bytes")
+        bus = ecu.bus or next(iter(self.vehicle.buses))
+        frame = CanFrame(ecu.request_id, bytes((len(payload),)) + payload)
+        response = self.vehicle.exchange_isotp(bus, frame, timeout=0.2)
+        return response.hex(" ").upper() if response is not None else "NO DATA"
 
     def _lifecycle(self, action: Callable[[], None]) -> str:
         action()

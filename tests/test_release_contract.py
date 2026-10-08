@@ -30,6 +30,8 @@ PUBLIC_API = {
     "Clock",
     "ConfigurationError",
     "Constant",
+    "DiagnosticSession",
+    "DidSignal",
     "DtcStore",
     "ECU",
     "ECUSDKError",
@@ -43,6 +45,7 @@ PUBLIC_API = {
     "IsoTpTimeoutError",
     "IsoTpTransport",
     "Linear",
+    "Nrc",
     "ObdError",
     "ObdRegistry",
     "PID_CATALOG",
@@ -64,6 +67,7 @@ PUBLIC_API = {
     "TcpServer",
     "TcpTransport",
     "UdsError",
+    "UdsServer",
     "Vehicle",
     "VehicleShell",
     "VehicleState",
@@ -105,6 +109,9 @@ def test_core_signatures() -> None:
         "signal_limits",
         "generators",
     ]
+    assert signature(ECU.diagnostic_payload) == (
+        "(self, request: 'bytes') -> 'bytes | None'"
+    )
     assert signature(Vehicle) == (
         "(name: 'str', buses: 'dict[str, CanBus]', ecus: 'list[ECU]', "
         "clock: 'Clock | None' = None, scenario: 'Scenario | None' = None, "

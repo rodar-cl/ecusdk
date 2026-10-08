@@ -46,6 +46,7 @@ from ecusdk.obd import (
 from ecusdk.shell import VehicleShell
 from ecusdk.signals import Constant, Linear, Ramp, Random, SignalGenerator, Sine
 from ecusdk.simulation import ECU, Scenario, ScenarioEvent, Vehicle, VehicleState
+from ecusdk.uds import DiagnosticSession, DidSignal, Nrc, UdsServer
 
 __all__ = [
     "CanError",
@@ -98,5 +99,9 @@ __all__ = [
     "VirtualCanBus",
     "VirtualCanNode",
     "VirtualClock",
+    "DiagnosticSession",
+    "DidSignal",
+    "Nrc",
+    "UdsServer",
     "load_vehicle",
 ]
