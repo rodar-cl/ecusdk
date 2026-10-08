@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Adaptador ELM327 por BLE con el extra opcional `ecusdk[ble]` (`bless`,
+  macOS/Linux): `ecusdk run --ble [--ble-name] [--ble-chunk]` y
+  `ecusdk.ble.serve_ble`. GATT `0BDA`/`0BDB`/`0BDC`, notificaciones troceadas
+  a 20 bytes por defecto. El núcleo sigue sin dependencias.
 - **Incompatible:** OBD Mode 03 incluye el número de DTCs tras `0x43`
   (`43 01 03 01`), como exige ISO 15765-4 en CAN.
 - ELM327: con eco activo, el comando eco termina en `\r` como en un adaptador
