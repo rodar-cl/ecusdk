@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- `ecusdk tui`: launcher interactivo con el extra opcional `ecusdk[tui]`
+  (`textual`, `tomli-w`). Elige, crea y edita vehículos TOML (validados con
+  `load_vehicle` antes de guardar), configura la conexión (TCP, control, BLE,
+  grabación) y controla el `ecusdk run` lanzado.
 - Adaptador ELM327 por BLE con el extra opcional `ecusdk[ble]` (`bless`,
   macOS/Linux): `ecusdk run --ble [--ble-name] [--ble-chunk]` y
   `ecusdk.ble.serve_ble`. GATT `0BDA`/`0BDB`/`0BDC`, notificaciones troceadas

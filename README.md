@@ -81,6 +81,17 @@ ecusdk shell                     # sesión interactiva con los mismos comandos
 ecusdk run examples/demo-car.toml --request "01 0D"
 ```
 
+### Launcher interactivo (opcional)
+
+Si prefieres no recordar flags, instala el extra `tui` (usa [Textual](https://textual.textualize.io)) y abre el launcher:
+
+```bash
+pip install 'ecusdk[tui]'
+ecusdk tui                       # opcional: ecusdk tui mi-auto.toml
+```
+
+Lista los vehículos de `./examples` y `~/.ecusdk/vehicles` con una vista previa, y permite crear, duplicar, borrar y editar cualquier tabla o valor del TOML como un árbol. Al guardar, el archivo se valida con `load_vehicle` y sólo se escribe si es válido. Antes de lanzar eliges host, puertos, BLE y grabación `.eculog`; luego ves la salida de `ecusdk run`, el `inspect` en vivo y una línea para enviar comandos del shell de control.
+
 ### Adaptador BLE (opcional)
 
 Para probar apps móviles que hablan con adaptadores ELM327 por Bluetooth Low Energy, instala el extra `ble` (macOS y Linux; usa [bless](https://github.com/kevincar/bless)) y añade `--ble`:
