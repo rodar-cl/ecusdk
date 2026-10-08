@@ -11,7 +11,7 @@ import threading
 from collections.abc import Callable, Iterator, MutableMapping, Sequence
 from dataclasses import asdict, dataclass, field
 from enum import Enum
-from typing import Any, cast
+from typing import Any, Protocol, cast
 
 from ecusdk.can import CanBus, CanFilter, CanFrame, VirtualCanBus, VirtualCanNode
 from ecusdk.clock import Clock, RealClock
@@ -42,6 +42,7 @@ __all__ = [
     "SignalMap",
     "SignalValue",
     "Vehicle",
+    "VehicleObserver",
     "VehicleState",
 ]
 
@@ -408,6 +409,18 @@ def _clamp(value: SignalValue, limits: tuple[float | None, float | None]) -> flo
     return value
 
 
+class VehicleObserver(Protocol):
+    """Observador de un ``Vehicle``, p. ej. ``ecusdk.recording.Recorder``.
+
+    ``capture`` se llama tras cada ``tick`` y cada cambio de lifecycle;
+    ``scenario_event`` antes de aplicar cada evento de escenario.
+    """
+
+    def capture(self) -> None: ...
+
+    def scenario_event(self, event: ScenarioEvent) -> None: ...
+
+
 class Vehicle:
     """Vehículo virtual: buses, ECUs, reloj, escenario, fallos y lifecycle.
 
@@ -431,6 +444,7 @@ class Vehicle:
         for ecu in self.ecus:
             ecu.set_protocol_clock(self.clock)
         self.scenario = scenario
+        self.recorder: VehicleObserver | None = None
         self.seed = seed
         self._rng = random.Random(seed)
         self._faults: list[Fault] = []
@@ -504,6 +518,7 @@ class Vehicle:
                 self._started_at = self.clock.now()
             if self.scenario is not None and not self.scenario.started:
                 self.scenario.start(self.clock.now())
+            self._observe()
 
     def stop(self) -> None:
         """Desconecta las ECUs y pasa a STOPPED; conserva señales y fallos."""
@@ -512,6 +527,7 @@ class Vehicle:
             self._disconnect_virtual_nodes()
             for ecu in self.ecus:
                 ecu.set_protocol_clock(self.clock)
+            self._observe()
 
     def pause(self) -> None:
         """Congela escenario, generadores y tráfico hasta ``resume``."""
@@ -522,6 +538,7 @@ class Vehicle:
                     self.scenario.pause(now)
                 self._paused_at = now
                 self.state = VehicleState.PAUSED
+                self._observe()
 
     def resume(self) -> None:
         """Reanuda desde PAUSED sin contar el tiempo pausado."""
@@ -534,6 +551,7 @@ class Vehicle:
                     self._paused_total += now - self._paused_at
                 self._paused_at = None
                 self.state = VehicleState.RUNNING
+                self._observe()
 
     def reset(self) -> None:
         """Detiene y vuelve al estado inicial: señales, fallos, seed y escenario."""
@@ -549,6 +567,7 @@ class Vehicle:
                 ecu.reset()
             if self.scenario is not None:
                 self.scenario.reset()
+            self._observe()
 
     def tick(self) -> None:
         """Avanza escenario, señales y fallos; procesa un frame por nodo ECU."""
@@ -559,9 +578,16 @@ class Vehicle:
                 now = self.clock.now()
                 elapsed = self.scenario.elapsed(now)
                 for event in self.scenario.due(now):
+                    if self.recorder is not None:
+                        self.recorder.scenario_event(event)
                     self._apply_event(event, now - (elapsed - event.at))
             self._update_signals()
             self._service_virtual_buses()
+            self._observe()
+
+    def _observe(self) -> None:
+        if self.recorder is not None:
+            self.recorder.capture()
 
     def advance(self, seconds: float, step: float = 0.01) -> None:
         """Duerme el reloj en pasos de ``step`` llamando a ``tick`` en cada uno.
@@ -643,6 +669,7 @@ class Vehicle:
             )
             self._faults.append(fault)
             self._update_signals()
+            self._observe()
             return fault
 
     def clear_fault(self, ecu: str, kind: str | None = None) -> None:
@@ -656,6 +683,7 @@ class Vehicle:
                 if fault.ecu != name or (kind is not None and fault.kind != kind)
             ]
             self._update_signals()
+            self._observe()
 
     def faults(self, ecu: str | None = None) -> list[Fault]:
         """Fallos activos ahora, opcionalmente de una sola ECU."""

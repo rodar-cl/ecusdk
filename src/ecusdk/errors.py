@@ -47,3 +47,7 @@ class SimulationError(ECUSDKError, ValueError):
 
 class VehicleStateError(ECUSDKError, RuntimeError):
     """Operación no permitida en el estado actual del vehículo."""
+
+
+class RecordingError(ECUSDKError, ValueError):
+    """Archivo ``.eculog`` inválido o de una versión no soportada."""

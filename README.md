@@ -10,7 +10,7 @@ Simula ECUs y conversa con ellas usando CAN, ISO-TP y OBD-II, sin depender de un
 
 [![CI](https://github.com/rodar-cl/ecusdk/actions/workflows/ci.yml/badge.svg)](https://github.com/rodar-cl/ecusdk/actions/workflows/ci.yml)
 [![Python 3.11–3.14](https://img.shields.io/badge/Python-3.11_%E2%80%93_3.14-3776AB?logo=python&logoColor=white)](https://www.python.org/)
-[![Tests: 186](https://img.shields.io/badge/tests-186_passing-2ea44f)](#métricas)
+[![Tests: 200](https://img.shields.io/badge/tests-200_passing-2ea44f)](#métricas)
 [![Cobertura: 98%](https://img.shields.io/badge/cobertura-98%25-2ea44f)](#métricas)
 [![Pyright strict](https://img.shields.io/badge/pyright-strict-1f6feb)](./pyproject.toml)
 [![Dependencias: 0](https://img.shields.io/badge/dependencias-0-brightgreen)](./pyproject.toml)
@@ -87,7 +87,7 @@ Medido sobre `main` con `uv run pytest --cov=ecusdk`.
 
 | | |
 | --- | --- |
-| 🧪 Tests | **186** pasando en **1.5 s** (incluye pruebas de propiedades con Hypothesis y contrato de API) |
+| 🧪 Tests | **200** pasando en **1.5 s** (incluye pruebas de propiedades con Hypothesis y contrato de API) |
 | 📈 Cobertura | **98 %** de líneas; CI exige ≥ 90 % |
 | 🧩 Código | ~3.200 líneas en `src/` · ~2.400 líneas de tests |
 | 📦 Dependencias de runtime | **0**, sólo biblioteca estándar |
@@ -187,11 +187,12 @@ events = [
 | OBD-II | Mode 01 con PIDs soportados (`0100`…), RPM, velocidad, temperaturas, carga, acelerador, combustible, MAF y tensión; Mode 03/04 para DTCs; Mode 09 PID 02 para VIN |
 | Simulación | Señales con generadores, reloj real o virtual, escenarios TOML deterministas con pausa, reinicio y seed |
 | UDS | DiagnosticSessionControl, ECUReset, ReadDTCInformation, ReadDataByIdentifier y TesterPresent, con NRCs, sesión S3 y DIDs configurables |
+| Grabación | Sesiones `.eculog` versionadas (frames, OBD/UDS, señales, DTCs, fallos, escenarios) y `ecusdk replay` con tiempos relativos o reinyección en SocketCAN |
 | Fallos | ECU offline, timeout, latencia, Flow Control tardío, frames perdidos, duplicados o malformados, longitud inválida, PID incorrecto, CF perdido, secuencia errónea, interrupción ISO-TP, sensor congelado, fuera de rango e intermitente |
 | Adaptador | Emulador ELM327 sobre TCP o pseudo-terminal, con consultas funcionales a varias ECUs y `ATSH` |
 | Herramientas | API Python tipada y CLI `run`, `inspect`, `shell`, `get`, `set`, `dtc`, `fault` y `faults` |
 
-Para conocer los detalles de los protocolos, límites y ejemplos de la API, consulta la [guía de protocolos](./docs/protocols.md) y la de [simulación y fallos](./docs/simulation.md).
+Para conocer los detalles de los protocolos, límites y ejemplos de la API, consulta la [guía de protocolos](./docs/protocols.md) , la de [simulación y fallos](./docs/simulation.md) y la de [grabación](./docs/recording.md).
 
 ## Casos de uso
 
@@ -203,13 +204,13 @@ Para conocer los detalles de los protocolos, límites y ejemplos de la API, cons
 
 ## Alcance y estado
 
-ECUSDK está en `0.1.0`, su primera versión con un contrato de API probado (`tests/test_release_contract.py`). Hasta `1.0` las versiones menores pueden introducir cambios incompatibles, siempre anotados en el [CHANGELOG](./CHANGELOG.md). La versión cubre CAN, ISO-TP, OBD-II, simulación con escenarios y fallos, ELM327 y la CLI de control. En `main` ya está el primer bloque de UDS. Grabación y reproducción, CAN FD e importación DBC forman parte de las siguientes versiones.
+ECUSDK está en `0.1.0`, su primera versión con un contrato de API probado (`tests/test_release_contract.py`). Hasta `1.0` las versiones menores pueden introducir cambios incompatibles, siempre anotados en el [CHANGELOG](./CHANGELOG.md). La versión cubre CAN, ISO-TP, OBD-II, simulación con escenarios y fallos, ELM327 y la CLI de control. En `main` ya están UDS y la grabación y reproducción de sesiones (bloque 0.2). CAN FD, importación DBC y gateways forman parte de las siguientes versiones.
 
 El simulador modela comportamientos observables del protocolo. No emula firmware de fabricantes, un runtime AUTOSAR completo ni los componentes electrónicos de una ECU. SocketCAN requiere Linux y una interfaz preparada por quien ejecuta la herramienta.
 
 ```mermaid
 flowchart LR
-    NOW[0.1<br/>CAN · ISO-TP · OBD-II<br/>escenarios · fallos · ELM327 · CLI] --> NEXT[0.2<br/>UDS ✓ · grabación y replay] --> LATER[Después<br/>CAN FD · DBC · gateways]
+    NOW[0.1<br/>CAN · ISO-TP · OBD-II<br/>escenarios · fallos · ELM327 · CLI] --> NEXT[0.2<br/>UDS ✓ · grabación y replay ✓] --> LATER[Después<br/>CAN FD · DBC · gateways]
 ```
 
 ## Desarrollo
