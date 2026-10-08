@@ -279,6 +279,8 @@ def test_wizard_launches_and_controls(tmp_path: Path) -> None:
             await _on(pilot, app, CarsScreen)
             await pilot.click("#next")
             connection = await _on(pilot, app, ConnectionScreen)
+            await _until(pilot, lambda: connection.query("#port"))  # en Collapsible
+            assert connection.query_one("#port", Input).border_title
             connection.query_one("#port", Input).value = "x"
             connection.action_next()
             assert app.screen is connection  # puerto inválido

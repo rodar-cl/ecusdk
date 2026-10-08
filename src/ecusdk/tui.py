@@ -818,21 +818,29 @@ class ConnectionScreen(Step):
             )
             with Collapsible(title="Opciones avanzadas", id="advanced"):
                 with Horizontal(classes="row"):
-                    yield Input(str(setup.port), id="port", type="integer")
-                    yield Input(str(setup.control), id="control", type="integer")
-                    yield Input(
-                        setup.record, placeholder="sesion.eculog", id="record-path"
-                    )
-                    yield Input(setup.ble_name, id="ble-name")
-
-    def on_mount(self) -> None:
-        for widget, title in (
-            ("port", "Puerto de la app"),
-            ("control", "Puerto de control"),
-            ("record-path", "Archivo de grabación"),
-            ("ble-name", "Nombre Bluetooth"),
-        ):
-            self.query_one(f"#{widget}", Input).border_title = title
+                    # Títulos al crear: los hijos de un Collapsible pueden no
+                    # estar montados todavía cuando corre on_mount.
+                    for title, field in (
+                        (
+                            "Puerto de la app",
+                            Input(str(setup.port), id="port", type="integer"),
+                        ),
+                        (
+                            "Puerto de control",
+                            Input(str(setup.control), id="control", type="integer"),
+                        ),
+                        (
+                            "Archivo de grabación",
+                            Input(
+                                setup.record,
+                                placeholder="sesion.eculog",
+                                id="record-path",
+                            ),
+                        ),
+                        ("Nombre Bluetooth", Input(setup.ble_name, id="ble-name")),
+                    ):
+                        field.border_title = title
+                        yield field
 
     @on(RadioSet.Changed)
     def mode_changed(self, event: RadioSet.Changed) -> None:
@@ -957,6 +965,9 @@ class DashboardScreen(Step):
         self.gone = False
         self.keys: list[str] = []
         self.live = Live("", [], [], [])
+        self.log_view = Log(
+            id="log"
+        )  # referencia directa: vive dentro de un Collapsible
 
     def body(self) -> Iterable[Any]:
         assert self.setup.path is not None
@@ -993,7 +1004,7 @@ class DashboardScreen(Step):
                     yield Button("⏸ Pausar", id="pause")
                     yield Button("↺ Reiniciar", id="reset")
         with Collapsible(title="Registro técnico", id="techlog"):
-            yield Log(id="log")
+            yield self.log_view
             yield Input(placeholder="Comando avanzado (escribe help)", id="cmd")
 
     def on_mount(self) -> None:
@@ -1007,7 +1018,7 @@ class DashboardScreen(Step):
 
     @work(exclusive=True, group="process")
     async def launch(self) -> None:
-        log = self.query_one(Log)
+        log = self.log_view
         self.stopping = False
         self._banner(Text("Iniciando simulación…"), "starting")
         self.query_one("#next", Button).label = "■ Detener"
@@ -1190,7 +1201,7 @@ class DashboardScreen(Step):
     def answered(self, line: str, response: str) -> None:
         if self.gone:
             return
-        self.query_one(Log).write_line(f"> {line}\n{response}")
+        self.log_view.write_line(f"> {line}\n{response}")
         if response.startswith("ERROR"):
             self.notify(response.removeprefix("ERROR: "), severity="error")
         self.poll()
