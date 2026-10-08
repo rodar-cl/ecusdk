@@ -32,7 +32,7 @@ def test_external_tcp_client_obd_and_settings() -> None:
         assert "OK" in command("ATE0")
         assert "41 0C 0D 48" in command("010C")
         assert "45 43 55 53 44 4B" in command("0902")
-        assert "43 03 01" in command("03")
+        assert "43 01 03 01" in command("03")
         assert "44" in command("04")
         assert command("03").startswith("43")
         assert "OK" in command("ATH1")

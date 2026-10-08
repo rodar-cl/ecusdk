@@ -96,7 +96,7 @@ def test_obd_modes_03_04_and_vin() -> None:
     vehicle = load_vehicle("examples/demo-car.toml")
     ecu = vehicle.ecus[0]
     ecu.dtcs.add("P0301")
-    assert ecu.obd_payload(bytes.fromhex("03")) == bytes.fromhex("43 03 01")
+    assert ecu.obd_payload(bytes.fromhex("03")) == bytes.fromhex("43 01 03 01")
     assert ecu.obd_payload(bytes.fromhex("04")) == bytes.fromhex("44")
     assert ecu.dtcs.list() == []
     assert ecu.obd_payload(bytes.fromhex("09 02")) == (

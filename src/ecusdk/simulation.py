@@ -220,9 +220,9 @@ class ECU:
         if mode == 0x01:
             return self.obd.encode(pid)
         if mode == 0x03:
-            return bytes((0x43,)) + b"".join(
-                encode_dtc(code) for code in self.dtcs.list()
-            )
+            # ISO 15765-4: en CAN la respuesta lleva el número de DTCs.
+            codes = self.dtcs.list()
+            return bytes((0x43, len(codes))) + b"".join(map(encode_dtc, codes))
         if mode == 0x04:
             self.dtcs.clear()
             return bytes((0x44,))

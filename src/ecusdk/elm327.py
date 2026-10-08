@@ -227,7 +227,7 @@ class Elm327Emulator:
         """Atiende comandos de ``transport`` hasta EOF y luego lo cierra."""
 
         def handle(command: str) -> str:
-            return (command if self.echo else "") + self.command(command)
+            return (command + "\r" if self.echo else "") + self.command(command)
 
         serve_lines(transport, handle)
 
