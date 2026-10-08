@@ -106,7 +106,7 @@ pip install 'ecusdk[ble]'
 ecusdk run examples/demo-car.toml --ble
 ```
 
-Se anuncia como `OBDII ecusdk` (`--ble-name`) con el GATT habitual de estos adaptadores: servicio `0BDA`, escritura en `0BDB` y notificaciones en `0BDC`. El servidor TCP sigue activo en paralelo. Las respuestas se notifican en trozos de 20 bytes (`--ble-chunk`), como un adaptador real sin MTU negociado, de modo que la app debe acumular notificaciones hasta el prompt `>`. Hace falta un teléfono físico: los simuladores de iOS y Android no tienen Bluetooth. En macOS, la terminal desde la que se ejecuta necesita permiso en *Ajustes del Sistema → Privacidad y seguridad → Bluetooth*; sin él, macOS cierra el proceso.
+Se anuncia como `OBDII ecusdk` (`--ble-name`) con el GATT habitual de estos adaptadores: servicio `0BDA`, escritura en `0BDB` y notificaciones en `0BDC`. El servidor TCP sigue activo en paralelo. Las respuestas se notifican en trozos de 20 bytes (`--ble-chunk`), como un adaptador real sin MTU negociado, de modo que la app debe acumular notificaciones hasta el prompt `>`. Hace falta un teléfono físico: los simuladores de iOS y Android no tienen Bluetooth. En macOS, la terminal desde la que se ejecuta necesita permiso en *Ajustes del Sistema → Privacidad y seguridad → Bluetooth*; sin él, macOS cierra el proceso. Algunas terminales de terceros no declaran el uso de Bluetooth, y en ellas macOS aborta el proceso sin preguntar; usa Terminal o iTerm. El asistente `ecusdk tui` detecta este caso y ofrece seguir sólo con Wi-Fi.
 
 ## Métricas
 

@@ -326,3 +326,59 @@ def test_ble_install(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
             assert connection.setup.ble
 
     asyncio.run(scenario())
+
+
+def test_leave_dashboard_while_running(tmp_path: Path) -> None:
+    """Salir del panel con la simulación en marcha la detiene sin romper la app."""
+
+    async def scenario() -> None:
+        app = EcusdkApp([DEMO], home=tmp_path)
+        app.setup.port, app.setup.control = _free_port(), _free_port()
+        async with app.run_test(size=(130, 44)) as pilot:
+            app.setup.path = DEMO.resolve()
+            app.push_screen(DashboardScreen())
+            await pilot.pause()
+            dash = app.screen
+            assert isinstance(dash, DashboardScreen)
+            await _until(pilot, lambda: dash.process is not None)
+            await _until(pilot, lambda: bool(dash.live.signals))
+            process = dash.process
+            assert process is not None
+            await pilot.press("escape")
+            await asyncio.wait_for(process.wait(), 10)
+            await pilot.pause(0.5)
+            assert isinstance(app.screen, CarsScreen)
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="SIGABRT es de POSIX")
+def test_ble_denied_by_macos_offers_wifi(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """macOS aborta el proceso si la terminal no declara Bluetooth (TCC)."""
+    monkeypatch.setattr("ecusdk.tui.sys.platform", "darwin")
+    abort = [sys.executable, "-c", "import os; os.abort()"]
+
+    def argv(_: Setup) -> list[str]:
+        return abort
+
+    monkeypatch.setattr(Setup, "argv", argv)
+
+    async def scenario() -> None:
+        app = EcusdkApp([DEMO], home=tmp_path)
+        app.setup.path, app.setup.ble = DEMO.resolve(), True
+        async with app.run_test(size=(130, 44)) as pilot:
+            app.push_screen(DashboardScreen())
+            await pilot.pause()
+            dash = app.screen
+            assert isinstance(dash, DashboardScreen)
+            no_ble = dash.query_one("#no-ble")
+            await _until(pilot, lambda: no_ble.display)
+            banner = dash.query_one("#banner", Static)
+            assert "Bluetooth" in str(banner.content)
+            await pilot.click("#no-ble")
+            await _until(pilot, lambda: "cerró sola" in str(banner.content))
+            assert not app.setup.ble and not no_ble.display
+
+    asyncio.run(scenario())

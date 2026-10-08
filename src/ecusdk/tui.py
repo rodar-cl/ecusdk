@@ -21,6 +21,7 @@ import tomllib
 from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
+from signal import SIGABRT
 from typing import Any, ClassVar, Literal, cast
 
 import tomli_w
@@ -178,6 +179,11 @@ def ble_install_argv() -> list[str]:
     if uv := shutil.which("uv"):
         return [uv, "pip", "install", "--python", sys.executable, "bless>=0.3"]
     return [sys.executable, "-m", "pip", "install", "bless>=0.3"]
+
+
+def ble_denied(code: int, ble: bool) -> bool:
+    """macOS (TCC) aborta el proceso si la terminal no declara uso de Bluetooth."""
+    return ble and sys.platform == "darwin" and code == -SIGABRT
 
 
 def lan_ip() -> str:
@@ -930,6 +936,7 @@ class DashboardScreen(Step):
         super().__init__()
         self.process: asyncio.subprocess.Process | None = None
         self.stopping = False
+        self.gone = False
         self.keys: list[str] = []
         self.live = Live("", [], [], [])
 
@@ -940,6 +947,9 @@ class DashboardScreen(Step):
             for ecu in load_vehicle(self.setup.path).ecus
         ]
         yield Static(Text("Iniciando simulación…"), id="banner")
+        yield Button(
+            "Seguir sin Bluetooth (sólo Wi-Fi)", id="no-ble", variant="warning"
+        )
         with Horizontal(id="dash"):
             with Vertical(id="sensors"):
                 yield Static("Sensores en vivo", classes="section")
@@ -995,16 +1005,35 @@ class DashboardScreen(Step):
             log.write_line(line.decode(errors="replace").rstrip())
         code = await process.wait()
         self.process = None
+        if self.gone:  # se salió del panel mientras se detenía
+            return
         log.write_line(f"proceso terminado ({code})")
         self.query_one("#next", Button).label = "▶ Iniciar de nuevo"
         if self.stopping:
             self._banner(Text("■ Simulación detenida"), "stopped")
+        elif ble_denied(code, self.setup.ble):
+            terminal = os.environ.get("TERM_PROGRAM", "tu terminal")
+            self._banner(Text(f"✗ macOS no deja a {terminal} usar Bluetooth"), "failed")
+            self.query_one("#no-ble", Button).display = True
+            self.notify(
+                f"macOS cerró la simulación porque {terminal} no declara permiso "
+                "de Bluetooth. Abre ecusdk tui desde Terminal o iTerm y acepta el "
+                "permiso, o sigue sin Bluetooth.",
+                severity="error",
+                timeout=20,
+            )
         else:
             self._banner(
                 Text("✗ La simulación se cerró sola. Revisa el registro técnico."),
                 "failed",
             )
             self.query_one("#techlog", Collapsible).collapsed = False
+
+    @on(Button.Pressed, "#no-ble")
+    def without_ble(self) -> None:
+        self.setup.ble = False
+        self.query_one("#no-ble", Button).display = False
+        self.launch()
 
     def _banner(self, text: Text, state: str) -> None:
         banner = self.query_one("#banner", Static)
@@ -1024,10 +1053,12 @@ class DashboardScreen(Step):
             self.stop()
 
     def action_back(self) -> None:
+        self.gone = True  # antes de detener: el worker puede terminar primero
         self.stop()
         cast(EcusdkApp, self.app).home_screen()
 
     def on_unmount(self) -> None:
+        self.gone = True
         self.stop()
 
     def poll(self) -> None:
@@ -1043,6 +1074,8 @@ class DashboardScreen(Step):
         self.app.call_from_thread(self.show, parse_inspect(text))
 
     def show(self, live: Live) -> None:
+        if self.gone:  # respuesta tardía de un hilo
+            return
         self.live = live
         setup = self.setup
         paused = live.state == "paused"
@@ -1137,6 +1170,8 @@ class DashboardScreen(Step):
         self.app.call_from_thread(self.answered, line, response)
 
     def answered(self, line: str, response: str) -> None:
+        if self.gone:
+            return
         self.query_one(Log).write_line(f"> {line}\n{response}")
         if response.startswith("ERROR"):
             self.notify(response.removeprefix("ERROR: "), severity="error")
@@ -1176,6 +1211,7 @@ class EcusdkApp(App[None]):
     #banner.starting { background: $boost; }
     #banner.stopped, #banner.failed { background: $error 25%; }
     #dash { height: 1fr; }
+    #no-ble { display: none; width: 100%; }
     #sensors { width: 1fr; }
     #signals { height: 1fr; }
     #new-value { width: 1fr; }
