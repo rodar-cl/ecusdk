@@ -67,8 +67,8 @@ def test_dtc_golden_vectors() -> None:
         "P0301": "03 01",
         "P03AF": "03 AF",
         "P0420": "04 20",
-        "B1234": "52 34",
-        "C0035": "80 35",
+        "B1234": "92 34",
+        "C0035": "40 35",
         "U0100": "C1 00",
     }
     for code, encoded in vectors.items():

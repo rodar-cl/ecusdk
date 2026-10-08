@@ -35,7 +35,7 @@ class DtcStore:
 def _validate_dtc(code: str) -> None:
     if (
         len(code) != 5
-        or code[0].upper() not in "PBCU"
+        or code[0].upper() not in "PCBU"
         or code[1].upper() not in "0123"
         or any(digit.upper() not in "0123456789ABCDEF" for digit in code[2:])
     ):
@@ -44,7 +44,7 @@ def _validate_dtc(code: str) -> None:
 
 def encode_dtc(code: str) -> bytes:
     _validate_dtc(code)
-    prefix = "PBCU".index(code[0].upper())
+    prefix = "PCBU".index(code[0].upper())
     suffix = code[1:].upper()
     return bytes(
         (
@@ -57,7 +57,7 @@ def encode_dtc(code: str) -> bytes:
 def decode_dtc(data: bytes) -> str:
     if len(data) != 2:
         raise ValueError("un DTC requiere dos bytes")
-    prefix = "PBCU"[(data[0] >> 6) & 0x03]
+    prefix = "PCBU"[(data[0] >> 6) & 0x03]
     return f"{prefix}{data[0] & 0x3F:02X}{data[1]:02X}"
 
 

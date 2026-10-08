@@ -9,7 +9,7 @@ from ecusdk.errors import ObdError
 from ecusdk.obd import decode_dtc, encode_dtc
 
 
-@given(st.sampled_from("PBCU"), st.integers(0, 3), st.integers(0, 4095))
+@given(st.sampled_from("PCBU"), st.integers(0, 3), st.integers(0, 4095))
 def test_dtc_property(prefix: str, first_digit: int, suffix: int) -> None:
     code = f"{prefix}{first_digit}{suffix:03X}"
     assert decode_dtc(encode_dtc(code)) == code
