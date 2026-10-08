@@ -28,6 +28,7 @@ from ecusdk.errors import (
     IsoTpTimeoutError,
     ObdError,
     ProtocolError,
+    RecordingError,
     SimulationError,
     UdsError,
     VehicleStateError,
@@ -43,6 +44,7 @@ from ecusdk.obd import (
     ObdRegistry,
     PidCodec,
 )
+from ecusdk.recording import EcuLog, Recorder, read_log, replay
 from ecusdk.shell import VehicleShell
 from ecusdk.signals import Constant, Linear, Ramp, Random, SignalGenerator, Sine
 from ecusdk.simulation import ECU, Scenario, ScenarioEvent, Vehicle, VehicleState
@@ -103,5 +105,10 @@ __all__ = [
     "DidSignal",
     "Nrc",
     "UdsServer",
+    "EcuLog",
+    "Recorder",
+    "RecordingError",
+    "read_log",
+    "replay",
     "load_vehicle",
 ]

@@ -3,12 +3,23 @@
 from __future__ import annotations
 
 import argparse
+import signal
 import threading
 
-from ecusdk.can import CanFrame
+from ecusdk.can import CanFrame, SocketCanBus
 from ecusdk.config import load_vehicle
 from ecusdk.elm327 import Elm327Emulator, TcpServer
+from ecusdk.errors import RecordingError
+from ecusdk.recording import (
+    Record,
+    Recorder,
+    format_record,
+    frame_of,
+    read_log,
+    replay,
+)
 from ecusdk.shell import VehicleShell, describe, send_command
+from ecusdk.simulation import Vehicle
 
 _CONTROL_PORT = 35001
 _REMOTE = ("get", "set", "dtc", "fault", "faults", "request")
@@ -34,6 +45,25 @@ def main(argv: list[str] | None = None) -> int:
         help="puerto del shell de control; 0 lo desactiva",
     )
     run.add_argument("--once", action="store_true", help="no iniciar el servidor")
+    run.add_argument("--record", default=None, help="grabar la sesión en un .eculog")
+    replay_parser = commands.add_parser("replay", help="reproducir un .eculog")
+    replay_parser.add_argument("log")
+    replay_parser.add_argument(
+        "--speed", type=float, default=1.0, help="multiplicador de velocidad"
+    )
+    replay_parser.add_argument(
+        "--fast", action="store_true", help="sin esperas entre registros"
+    )
+    replay_parser.add_argument(
+        "--type", action="append", dest="types", help="filtrar por tipo de registro"
+    )
+    replay_parser.add_argument(
+        "--socketcan",
+        default=None,
+        metavar="IFACE",
+        help="reinyectar los frames en esta interfaz SocketCAN (explícita)",
+    )
+    replay_parser.add_argument("--bus", default=None, help="sólo frames de este bus")
     inspect = commands.add_parser(
         "inspect", help="describir un TOML o el vehículo en ejecución"
     )
@@ -49,6 +79,8 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.command == "run":
         return _run(args)
+    if args.command == "replay":
+        return _replay(args)
     if args.command == "inspect" and args.config is not None:
         print(describe(load_vehicle(args.config)))
         return 0
@@ -67,8 +99,43 @@ def main(argv: list[str] | None = None) -> int:
     return 1 if response.startswith("ERROR") else 0
 
 
+def _replay(args: argparse.Namespace) -> int:
+    try:
+        log = read_log(args.log)
+    except (OSError, RecordingError) as error:
+        print(f"ecusdk: {error}")
+        return 1
+    bus = SocketCanBus(args.socketcan) if args.socketcan else None
+
+    def handle(record: Record) -> None:
+        if args.bus is not None and record.get("bus", args.bus) != args.bus:
+            return
+        if bus is not None and record["type"] == "frame":
+            bus.send(frame_of(record))
+        if args.types is None or record["type"] in args.types:
+            print(format_record(record), flush=True)
+
+    try:
+        replay(log, handle, speed=0 if args.fast else args.speed)
+    except KeyboardInterrupt:
+        pass
+    finally:
+        if bus is not None:
+            bus.close()
+    return 0
+
+
 def _run(args: argparse.Namespace) -> int:
     vehicle = load_vehicle(args.config)
+    recorder = Recorder(vehicle, args.record) if args.record else None
+    try:
+        return _serve(args, vehicle)
+    finally:
+        if recorder is not None:
+            recorder.close()
+
+
+def _serve(args: argparse.Namespace, vehicle: Vehicle) -> int:
     vehicle.start()
     print(f"{vehicle.name}: running")
     if args.request is not None:
@@ -88,15 +155,23 @@ def _run(args: argparse.Namespace) -> int:
         threading.Thread(target=servers[1].serve_forever, daemon=True).start()
         print(f"control: {args.host}:{args.control_port}")
     print(f"ELM327: {args.host}:{args.port}")
+    # SIGTERM (docker stop, systemd) cierra igual que Ctrl+C: servidores,
+    # vehículo y grabación terminan de forma ordenada.
+    previous = signal.signal(signal.SIGTERM, _interrupt)
     try:
         servers[0].serve_forever()
     except KeyboardInterrupt:
         pass
     finally:
+        signal.signal(signal.SIGTERM, previous)
         for server in servers:
             server.close()
         vehicle.stop()
     return 0
+
+
+def _interrupt(signum: int, frame: object) -> None:
+    raise KeyboardInterrupt
 
 
 def _shell(host: str, port: int) -> int:

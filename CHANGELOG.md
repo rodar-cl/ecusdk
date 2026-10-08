@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+- Grabación de sesiones en `.eculog` v1 (JSON Lines, documentado en
+  `docs/recording.md`): frames de buses virtuales, peticiones y respuestas
+  OBD/UDS reensambladas, señales, DTCs, fallos, eventos de escenario y
+  lifecycle. `Recorder`, `read_log`, `EcuLog.state_at/frames` y `replay`.
+- CLI: `ecusdk run --record` y `ecusdk replay` (`--speed`, `--fast`, `--type`,
+  `--bus`, `--socketcan`).
+- `Vehicle.recorder` acepta un `VehicleObserver`; nuevo `RecordingError`.
+- `ecusdk run` termina de forma ordenada con SIGTERM (`docker stop`,
+  systemd), igual que con Ctrl+C.
+- El shell de control hace un `tick` tras cada comando para que un recorder
+  registre el cambio al momento.
 - UDS (ISO 14229-1) propio en cada ECU (`ecu.uds`): 0x10, 0x11, 0x19
   (0x01, 0x02, 0x0A), 0x22 y 0x3E, con suppressPosRspMsgIndication, NRCs,
   timeout S3 y DIDs configurables por API o TOML (`[ecus.<ecu>.uds.dids]`),

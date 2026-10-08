@@ -33,6 +33,7 @@ PUBLIC_API = {
     "DiagnosticSession",
     "DidSignal",
     "DtcStore",
+    "EcuLog",
     "ECU",
     "ECUSDKError",
     "Elm327Emulator",
@@ -56,6 +57,8 @@ PUBLIC_API = {
     "Ramp",
     "Random",
     "RealClock",
+    "Recorder",
+    "RecordingError",
     "SPEED_PID",
     "Scenario",
     "ScenarioEvent",
@@ -76,6 +79,8 @@ PUBLIC_API = {
     "VirtualCanNode",
     "VirtualClock",
     "load_vehicle",
+    "read_log",
+    "replay",
 }
 
 
@@ -137,7 +142,7 @@ def test_every_error_is_catchable_as_ecusdk_error() -> None:
         for name in PUBLIC_API
         if name.endswith("Error") and name != "ECUSDKError"
     ]
-    assert len(errors) == 10
+    assert len(errors) == 11
     assert all(issubclass(error, ECUSDKError) for error in errors)
 
 

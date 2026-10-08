@@ -122,7 +122,9 @@ class VehicleShell:
         try:
             with self.vehicle.lock:
                 self.vehicle.tick()
-                return command(words[1:])
+                result = command(words[1:])
+                self.vehicle.tick()  # registra el cambio en un recorder activo
+                return result
         except (ECUSDKError, ValueError, KeyError, IndexError) as error:
             message = error.args[0] if error.args else type(error).__name__
             return f"ERROR: {message}"
