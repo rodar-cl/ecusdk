@@ -232,12 +232,17 @@ def test_advanced_editor(tmp_path: Path) -> None:
             tree = cast(Tree[Any], editor.query_one("#tree", Tree))
             value = editor.query_one("#value", Input)
 
-            def select(path: tuple[Any, ...]) -> None:
-                # El árbol se reconstruye tras cada cambio: buscar el nodo actual.
-                tree.move_cursor(next(n for n in _walk(tree.root) if n.data == path))
+            async def select(path: tuple[Any, ...]) -> None:
+                # El árbol se llena al montar y se reconstruye tras cada cambio.
+                def node() -> Any:
+                    return next((n for n in _walk(tree.root) if n.data == path), None)
 
-            select(rpm)
-            await _until(pilot, lambda: editor.selected == rpm and value.value == "850")
+                await _until(pilot, node)
+                tree.move_cursor(node())
+                await _until(pilot, lambda: editor.selected == path)
+
+            await select(rpm)
+            await _until(pilot, lambda: value.value == "850")
             value.value = "3000"
             await pilot.click("#apply")
             await _until(
@@ -246,8 +251,7 @@ def test_advanced_editor(tmp_path: Path) -> None:
                     editor.document["ecus"]["ecm"]["signals"]["rpm"]["initial"] == 3000
                 ),
             )
-            select(signals)
-            await _until(pilot, lambda: editor.selected == signals)
+            await select(signals)
             editor.query_one("#key", Input).value = "temp"
             value.value = "{ initial = 90 }"
             await pilot.click("#add")
@@ -355,12 +359,12 @@ def test_ble_install(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
             ble = connection.query_one("#ble", RadioButton)
             tcp = connection.query_one("#tcp", RadioButton)
             # Cancelar vuelve a Wi-Fi.
-            await pilot.click("#ble")
+            ble.value = True  # emite RadioSet.Changed como un clic
             await _on(pilot, app, ConfirmScreen)
             await pilot.click("#no")
             await _until(pilot, lambda: app.screen is connection and tcp.value)
             # La instalación falla: aviso y vuelta a Wi-Fi.
-            await pilot.click("#ble")
+            ble.value = True  # emite RadioSet.Changed como un clic
             await _on(pilot, app, ConfirmScreen)
             await pilot.click("#yes")
             await _until(
@@ -373,7 +377,7 @@ def test_ble_install(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
             )
             # La instalación funciona: queda en Bluetooth.
             install[0] = [sys.executable, "-c", f"open({str(marker)!r}, 'w')"]
-            await pilot.click("#ble")
+            ble.value = True  # emite RadioSet.Changed como un clic
             await _on(pilot, app, ConfirmScreen)
             await pilot.click("#yes")
             await _until(
