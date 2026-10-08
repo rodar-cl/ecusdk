@@ -6,6 +6,12 @@
   macOS/Linux): `ecusdk run --ble [--ble-name] [--ble-chunk]` y
   `ecusdk.ble.serve_ble`. GATT `0BDA`/`0BDB`/`0BDC`, notificaciones troceadas
   a 20 bytes por defecto. El núcleo sigue sin dependencias.
+- **Incompatible:** OBD Mode 03 incluye el número de DTCs tras `0x43`
+  (`43 01 03 01`), como exige ISO 15765-4 en CAN.
+- ELM327: con eco activo, el comando eco termina en `\r` como en un adaptador
+  real, en vez de pegarse a la respuesta (`ATZELM327 v1.5`).
+- Prueba de contrato con la app Rodar (`tests/test_elm327_session.py`): `ATZ`,
+  comando desconocido tratado sin romper la sesión; VIN y DTCs siguen disponibles.
 - Grabación de sesiones en `.eculog` v1 (JSON Lines, documentado en
   `docs/recording.md`): frames de buses virtuales, peticiones y respuestas
   OBD/UDS reensambladas, señales, DTCs, fallos, eventos de escenario y
