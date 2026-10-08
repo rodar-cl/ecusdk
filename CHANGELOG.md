@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- **Incompatible:** los dos bits altos de un DTC siguen SAE J2012: `01` es
+  chasis (C) y `10` carrocería (B). Antes estaban invertidos, de modo que
+  `C0123` se enviaba como `B0123`; los códigos P y U no cambian.
 - `ecusdk tui`: asistente interactivo por pasos (Auto → Conexión → Iniciar →
   En marcha) con el extra opcional `ecusdk[tui]` (`textual`, `tomli-w`).
   Crea y personaliza vehículos (sensores del catálogo OBD-II, modo avanzado
