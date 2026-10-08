@@ -42,6 +42,10 @@ generator = { type = "random", minimum = 13.8, maximum = 14.4, seed = 1 }
 "01:0D" = "speed"
 "01:42" = "battery_voltage"
 
+[ecus.ecm.uds.dids]
+"0xF18C" = "ECM-SN-0001"
+"0x0101" = { signal = "rpm", length = 2, scale = 4 }
+
 [ecus.tcm]
 bus = "powertrain"
 

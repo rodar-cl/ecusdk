@@ -33,6 +33,7 @@ from ecusdk.isotp import reassemble
 from ecusdk.isotp_transport import IsoTpTransport
 from ecusdk.obd import DtcStore, ObdRegistry, encode_dtc
 from ecusdk.signals import SignalGenerator, SignalValue
+from ecusdk.uds import UdsServer
 
 __all__ = [
     "ECU",
@@ -135,13 +136,19 @@ class ECU:
     )
     _initial_signals: dict[str, SignalValue] = field(init=False, repr=False)
     _transport: IsoTpTransport = field(init=False, repr=False)
+    _clock: Clock = field(init=False, repr=False)
     obd: ObdRegistry = field(init=False, repr=False)
+    uds: UdsServer = field(init=False, repr=False)
 
     def __post_init__(self) -> None:
         self.signals = SignalMap(dict(self.signals), self.signal_limits)
         self._initial_signals = dict(self.signals)
         self._transport = IsoTpTransport(self.response_id, self.request_id)
         self.obd = ObdRegistry(self.signals)
+        self._clock = RealClock()
+        self.uds = UdsServer(self.signals, lambda: self.dtcs.list(), self._uds_reset)
+        if len(self.vin) == 17:
+            self.uds.did(0xF190, self.vin)
         generators, self.generators = self.generators, {}
         for name, generator in generators.items():
             self.drive(name, generator)
@@ -167,13 +174,15 @@ class ECU:
             self.generators[name] = generator
 
     def reset(self) -> None:
-        """Cancela ISO-TP y restaura las señales iniciales."""
+        """Cancela ISO-TP, vuelve a la sesión UDS por defecto y restaura señales."""
         self._transport.reset()
+        self.uds.reset()
         for name, value in self._initial_signals.items():
             self.signals[name] = value
 
     def set_protocol_clock(self, clock: Clock) -> None:
         """Asigna el reloj de transporte y cancela transferencias pendientes."""
+        self._clock = clock
         self._transport = IsoTpTransport(self.response_id, self.request_id, clock=clock)
 
     def get_signal(self, name: str) -> SignalValue:
@@ -186,6 +195,20 @@ class ECU:
     def set_signal(self, name: str, value: SignalValue) -> None:
         """Escribe una señal validando tipo, finitud y límites."""
         self.signals[name] = value
+
+    def _uds_reset(self, kind: int) -> None:
+        # hardReset y keyOffOnReset reinician el estado; softReset sólo la sesión.
+        if kind in (0x01, 0x02):
+            for name, value in self._initial_signals.items():
+                self.signals[name] = value
+
+    def diagnostic_payload(self, request: bytes) -> bytes | None:
+        """Respuesta OBD (modos 0x01–0x0A) o UDS (resto de SIDs), o ``None``."""
+        if not request:
+            return None
+        if request[0] <= 0x0A:
+            return self.obd_payload(request)
+        return self.uds.handle(request, self._clock.now())
 
     def obd_payload(self, request: bytes) -> bytes | None:
         """Respuesta OBD a un payload de petición, o ``None`` si no se soporta."""
@@ -215,7 +238,7 @@ class ECU:
         try:
             payload = self._transport.receive(frame)
             if payload is not None:
-                response_payload = self.obd_payload(payload)
+                response_payload = self.diagnostic_payload(payload)
                 if response_payload is not None:
                     self._transport.send(response_payload)
             return self._transport.poll()

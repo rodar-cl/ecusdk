@@ -12,9 +12,25 @@ from pathlib import Path
 from typing import Any, cast
 
 from ecusdk.can import CanBus, SocketCanBus, VirtualCanBus
-from ecusdk.errors import ConfigurationError, SimulationError
+from ecusdk.errors import ConfigurationError, SimulationError, UdsError
 from ecusdk.signals import generator_from_config
 from ecusdk.simulation import ECU, Scenario, Vehicle
+from ecusdk.uds import DidSignal, DidValue
+
+
+def _did_value(raw: object, where: str) -> DidValue:
+    """Texto ASCII, lista de bytes o tabla ``{signal, length, scale, offset}``."""
+    if isinstance(raw, str):
+        return raw
+    if isinstance(raw, list):
+        items = cast(list[object], raw)
+        if not all(type(item) is int and 0 <= item <= 0xFF for item in items):
+            raise ConfigurationError(f"{where}: la lista debe contener bytes")
+        return bytes(cast(list[int], items))
+    try:
+        return DidSignal(**_table(raw, where))
+    except TypeError as error:
+        raise ConfigurationError(f"{where}: {error}") from error
 
 
 def _table(value: object, where: str) -> dict[str, Any]:
@@ -130,6 +146,16 @@ def load_vehicle(path: str | Path) -> Vehicle:
                 ecu.obd.pid(identifier, source=source)
             except ValueError as error:
                 raise ConfigurationError(str(error)) from error
+        uds_table = _table(data.get("uds", {}), f"[ecus.{name}.uds]")
+        for key, raw in _table(uds_table.get("dids", {}), "dids").items():
+            where = f"DID {key!r} de {name!r}"
+            try:
+                identifier = int(key, 16)
+                ecu.uds.did(identifier, _did_value(raw, where))
+            except (ValueError, UdsError) as error:
+                if isinstance(error, ConfigurationError):
+                    raise
+                raise ConfigurationError(f"{where} inválido: {error}") from error
 
     scenario_data = _table(document.get("scenario", {}), "[scenario]")
     raw_events = scenario_data.get("events", [])
