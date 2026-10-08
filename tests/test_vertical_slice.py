@@ -52,4 +52,4 @@ def test_vehicle_uses_isotp_for_long_vin_and_dtcs() -> None:
     assert vin == bytes.fromhex("49 02 01") + b"ECUSDK00000000001"
 
     dtcs = vehicle.exchange_isotp("powertrain", CanFrame(0x7E0, bytes.fromhex("01 03")))
-    assert dtcs == bytes.fromhex("43 03 01 C1 00")
+    assert dtcs == bytes.fromhex("43 02 03 01 C1 00")
