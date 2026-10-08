@@ -475,9 +475,17 @@ class CarsScreen(Step):
 
     @on(Button.Pressed, "#customize")
     def action_customize(self) -> None:
-        if self.selected is not None:
-            self.setup.path = self.selected
-            self.app.push_screen(CustomizeScreen(self.selected))
+        path = self.selected
+        if path is None:
+            return
+        if path.parent == Path("examples").resolve():
+            # Los ejemplos no se reescriben: se personaliza una copia propia.
+            copy = self._free(path.stem)
+            shutil.copyfile(path, copy)
+            self.notify(f"Los ejemplos no se modifican: editas una copia en {copy}")
+            path = copy
+        self.setup.path = path
+        self.app.push_screen(CustomizeScreen(path))
 
     @on(Button.Pressed, "#copy")
     def action_copy(self) -> None:

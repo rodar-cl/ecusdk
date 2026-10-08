@@ -392,3 +392,30 @@ def test_ble_denied_by_macos_offers_wifi(
             assert not app.setup.ble and not no_ble.display
 
     asyncio.run(scenario())
+
+
+def test_customize_example_edits_a_copy(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Personalizar un ejemplo no lo reescribe: trabaja sobre una copia en home."""
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "examples").mkdir()
+    example = tmp_path / "examples" / "demo-car.toml"
+    shutil.copyfile(DEMO, example)
+    original = example.read_text()
+    home = tmp_path / "home"
+
+    async def scenario() -> None:
+        app = EcusdkApp([], home=home)
+        async with app.run_test(size=(130, 40)) as pilot:
+            await pilot.press("p")
+            screen = app.screen
+            assert isinstance(screen, CustomizeScreen)
+            await _until(pilot, lambda: bool(screen.query("#next")))
+            screen.query_one("#value-0", Input).value = "1234"
+            await pilot.click("#next")
+            await _until(pilot, lambda: isinstance(app.screen, CarsScreen))
+
+    asyncio.run(scenario())
+    assert example.read_text() == original
+    assert load_vehicle(home / "demo-car.toml").ecu("ecm").get_signal("rpm") == 1234
