@@ -158,9 +158,19 @@ def test_customize_edits_adds_and_drops(tmp_path: Path) -> None:
             screen.query_one("#name", Input).value = "Mi demo"
             screen.query_one("#value-0", Input).value = "3000"
             cast(Select[str], screen.query_one("#add-0", Select)).value = "fuel_level"
-            await _until(pilot, lambda: bool(screen.query("#drop-2")))
+            # recompose borra y vuelve a montar todo: esperar la pantalla completa
+            await _until(
+                pilot, lambda: bool(screen.query("#drop-2") and screen.query("#next"))
+            )
             await pilot.click("#drop-1")  # speed
-            await _until(pilot, lambda: not screen.query("#drop-2"))
+            await _until(
+                pilot,
+                lambda: bool(
+                    screen.query("#drop-1")
+                    and not screen.query("#drop-2")
+                    and screen.query("#next")
+                ),
+            )
             screen.query_one("#value-0", Input).value = "abc"
             await pilot.click("#next")
             await pilot.pause()
@@ -281,7 +291,7 @@ def test_wizard_launches_and_controls(tmp_path: Path) -> None:
 
 def test_ble_install(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     installed: list[bool] = [False]
-    monkeypatch.setattr("ecusdk.tui.sys.platform", "darwin")
+    monkeypatch.setattr("ecusdk.tui.WINDOWS", False)
     monkeypatch.setattr("ecusdk.tui.ble_available", lambda: installed[0])
     code = "import sys; print('sin red'); sys.exit(1)"
     monkeypatch.setattr(
@@ -357,7 +367,7 @@ def test_ble_denied_by_macos_offers_wifi(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """macOS aborta el proceso si la terminal no declara Bluetooth (TCC)."""
-    monkeypatch.setattr("ecusdk.tui.sys.platform", "darwin")
+    monkeypatch.setattr("ecusdk.tui.MACOS", True)
     abort = [sys.executable, "-c", "import os; os.abort()"]
 
     def argv(_: Setup) -> list[str]:

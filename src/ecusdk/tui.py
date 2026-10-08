@@ -56,6 +56,8 @@ from ecusdk.shell import send_command
 from ecusdk.simulation import Vehicle
 
 HOME = Path.home() / ".ecusdk" / "vehicles"
+MACOS = sys.platform == "darwin"
+WINDOWS = sys.platform == "win32"  # bless no soporta Windows
 TEMPLATE = """\
 [vehicle]
 name = "Mi auto"
@@ -183,7 +185,7 @@ def ble_install_argv() -> list[str]:
 
 def ble_denied(code: int, ble: bool) -> bool:
     """macOS (TCC) aborta el proceso si la terminal no declara uso de Bluetooth."""
-    return ble and sys.platform == "darwin" and code == -SIGABRT
+    return ble and MACOS and code == -SIGABRT
 
 
 def lan_ip() -> str:
@@ -775,17 +777,16 @@ class ConnectionScreen(Step):
 
     def body(self) -> Iterable[Any]:
         setup = self.setup
-        windows = sys.platform == "win32"
         with VerticalScroll():
             with RadioSet(id="mode"):
                 yield RadioButton("Wi-Fi / red local", value=not setup.ble, id="tcp")
                 yield RadioButton(
                     "Bluetooth (BLE) — no disponible en Windows"
-                    if windows
+                    if WINDOWS
                     else "Bluetooth (BLE)",
                     value=setup.ble,
                     id="ble",
-                    disabled=windows,
+                    disabled=WINDOWS,
                 )
             yield Static(
                 Text(self.MODE_HELP["ble" if setup.ble else "tcp"]), id="mode-help"
