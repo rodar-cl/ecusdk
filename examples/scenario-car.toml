@@ -1,0 +1,64 @@
+# Vehículo con dos ECUs, señales generadas y un escenario con fallos.
+# uv run ecusdk run examples/scenario-car.toml
+
+[vehicle]
+name = "scenario-car"
+vin = "ECUSDK00000000002"
+seed = 7
+
+[buses.powertrain]
+type = "can"
+bitrate = 500000
+
+[ecus.ecm]
+bus = "powertrain"
+
+[ecus.ecm.can]
+request_id = 0x7E0
+response_id = 0x7E8
+
+[ecus.ecm.signals.rpm]
+initial = 850
+min = 0
+max = 7000
+generator = { type = "ramp", start = 850, end = 3000, duration = 10, at = 5 }
+
+[ecus.ecm.signals.speed]
+initial = 0
+
+[ecus.ecm.signals.coolant_temperature]
+initial = 20
+min = -40
+max = 215
+generator = { type = "ramp", start = 20, end = 90, duration = 120 }
+
+[ecus.ecm.signals.battery_voltage]
+initial = 14.1
+generator = { type = "random", minimum = 13.8, maximum = 14.4, seed = 1 }
+
+[ecus.ecm.obd]
+"01:05" = "coolant_temperature"
+"01:0C" = "rpm"
+"01:0D" = "speed"
+"01:42" = "battery_voltage"
+
+[ecus.tcm]
+bus = "powertrain"
+
+[ecus.tcm.can]
+request_id = 0x7E1
+response_id = 0x7E9
+
+[ecus.tcm.signals.speed]
+initial = 0
+generator = { type = "sine", offset = 60, amplitude = 20, period = 30 }
+
+[ecus.tcm.obd]
+"01:0D" = "speed"
+
+[scenario]
+events = [
+    { at = 20, ecu = "ecm", action = "sensor_frozen", signal = "rpm", duration = 5 },
+    { at = 30, ecu = "tcm", action = "ecu_offline", duration = 3 },
+    { at = 40, ecu = "ecm", action = "latency", delay = 0.1, duration = 10 },
+]

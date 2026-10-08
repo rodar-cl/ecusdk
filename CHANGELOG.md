@@ -2,6 +2,29 @@
 
 ## Unreleased
 
+- Añadidos generadores de señales deterministas (constant, linear, ramp, sine,
+  random con seed y custom) en API y TOML, y `Vehicle.advance` / `elapsed`.
+- Escenarios TOML (`[scenario] events`) con cambios de señal y fallos; la
+  ventana de cada fallo empieza en su instante programado y las repeticiones
+  tras `reset()` son idénticas.
+- Inyección de fallos por API, escenario y CLI: ECU offline, timeout, latencia,
+  Flow Control tardío, frame drop, duplicado, malformado, longitud inválida,
+  PID incorrecto, CF perdido, secuencia errónea, interrupción ISO-TP, sensor
+  congelado, fuera de rango e intermitente.
+- `exchange*` aceptan `timeout` para esperar respuestas retrasadas; `Clock`
+  incorpora `sleep`. Los clientes que implementan `Clock` deben añadirlo.
+- Catálogo OBD ampliado (carga, temperaturas, presión, MAF, acelerador,
+  combustible, tensión) con offset en `PidCodec`, y bitmaps de PIDs soportados
+  (`0100`, `0120`…).
+- ELM327 acepta cualquier consulta OBD, direccionamiento funcional a varias
+  ECUs, `ATSH`, `ATS0/1`, `ATI`, `ATD` y responde `CAN ERROR` ante errores
+  ISO-TP.
+- CLI: `inspect`, `shell`, `get`, `set`, `dtc`, `fault` y `faults` sobre un
+  shell de control TCP que `ecusdk run` sirve en el puerto 35001.
+- Jerarquía de errores del PRD: `ConfigurationError`, `CanError`, `UdsError`,
+  `SimulationError` y `VehicleStateError`, compatibles con `ValueError` /
+  `RuntimeError`.
+
 - Añadidos nodos CAN independientes con broadcast, filtros por ID/máscara,
   timestamps de Clock y cierre explícito; Vehicle usa nodos para cada ECU
   y conserva las transacciones OBD/ISO-TP completas.

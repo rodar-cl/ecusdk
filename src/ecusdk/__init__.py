@@ -15,22 +15,54 @@ from ecusdk.elm327 import (
     Elm327Server,
     PtySerialTransport,
     TcpElm327Server,
+    TcpServer,
     TcpTransport,
 )
 from ecusdk.errors import (
     AdapterError,
+    CanError,
+    ConfigurationError,
     ECUSDKError,
     IsoTpError,
     IsoTpTimeoutError,
     ObdError,
     ProtocolError,
+    SimulationError,
+    UdsError,
+    VehicleStateError,
 )
+from ecusdk.faults import FAULT_KINDS, Fault
 from ecusdk.isotp import IsoTpReceiver
 from ecusdk.isotp_transport import IsoTpSender, IsoTpTransport
-from ecusdk.obd import RPM_PID, SPEED_PID, DtcStore, ObdRegistry, PidCodec
+from ecusdk.obd import (
+    PID_CATALOG,
+    RPM_PID,
+    SPEED_PID,
+    DtcStore,
+    ObdRegistry,
+    PidCodec,
+)
+from ecusdk.shell import VehicleShell
+from ecusdk.signals import Constant, Linear, Ramp, Random, SignalGenerator, Sine
 from ecusdk.simulation import ECU, Scenario, ScenarioEvent, Vehicle, VehicleState
 
 __all__ = [
+    "CanError",
+    "ConfigurationError",
+    "Constant",
+    "FAULT_KINDS",
+    "Fault",
+    "Linear",
+    "PID_CATALOG",
+    "Ramp",
+    "Random",
+    "SignalGenerator",
+    "SimulationError",
+    "Sine",
+    "TcpServer",
+    "UdsError",
+    "VehicleShell",
+    "VehicleStateError",
     "CanBus",
     "CanFilter",
     "CanFrame",

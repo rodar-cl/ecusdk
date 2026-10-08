@@ -1,23 +1,48 @@
-"""Runtime mínimo de vehículos, ECUs y escenarios deterministas."""
+"""Runtime de vehículos, ECUs, señales, escenarios y fallos deterministas."""
 
 from __future__ import annotations
 
+import heapq
+import itertools
 import json
 import math
+import random
 import threading
-from collections.abc import Iterator, MutableMapping, Sequence
+from collections.abc import Callable, Iterator, MutableMapping, Sequence
 from dataclasses import asdict, dataclass, field
 from enum import Enum
-from typing import Any, TypeAlias
+from typing import Any, cast
 
 from ecusdk.can import CanBus, CanFilter, CanFrame, VirtualCanBus, VirtualCanNode
 from ecusdk.clock import Clock, RealClock
-from ecusdk.errors import IsoTpError, ObdError
+from ecusdk.errors import (
+    IsoTpError,
+    ObdError,
+    SimulationError,
+    VehicleStateError,
+)
+from ecusdk.faults import (
+    DELAY_FAULTS,
+    FAULT_ALIASES,
+    FAULT_KINDS,
+    FRAME_FAULTS,
+    SENSOR_FAULTS,
+    Fault,
+)
 from ecusdk.isotp import reassemble
 from ecusdk.isotp_transport import IsoTpTransport
 from ecusdk.obd import DtcStore, ObdRegistry, encode_dtc
+from ecusdk.signals import SignalGenerator, SignalValue
 
-SignalValue: TypeAlias = int | float
+__all__ = [
+    "ECU",
+    "Scenario",
+    "ScenarioEvent",
+    "SignalMap",
+    "SignalValue",
+    "Vehicle",
+    "VehicleState",
+]
 
 
 class VehicleState(Enum):
@@ -36,6 +61,7 @@ class SignalMap(MutableMapping[str, SignalValue]):
     ) -> None:
         self._values = dict(values)
         self._limits = limits or {}
+        self._overrides: dict[str, SignalValue] = {}
         for name, value in self._values.items():
             self._validate(name, value)
 
@@ -54,7 +80,24 @@ class SignalMap(MutableMapping[str, SignalValue]):
             raise ValueError(f"valor fuera de rango para señal {name}")
 
     def __getitem__(self, key: str) -> SignalValue:
+        if key in self._overrides:
+            return self._overrides[key]
         return self._values[key]
+
+    def override(self, name: str, value: SignalValue) -> None:
+        """Fija el valor observable sin límites de rango (fallos de sensor).
+
+        Las escrituras siguen actualizando el valor real, que vuelve a verse
+        al llamar ``clear_overrides``.
+        """
+        if name not in self._values:
+            raise KeyError(f"señal desconocida: {name}")
+        if type(value) not in (int, float) or not math.isfinite(float(value)):
+            raise ValueError(f"valor inválido para señal {name}")
+        self._overrides[name] = value
+
+    def clear_overrides(self) -> None:
+        self._overrides.clear()
 
     def __setitem__(self, key: str, value: SignalValue) -> None:
         self._validate(key, value)
@@ -85,6 +128,9 @@ class ECU:
     signal_limits: dict[str, tuple[float | None, float | None]] = field(
         default_factory=lambda: dict[str, tuple[float | None, float | None]]()
     )
+    generators: dict[str, SignalGenerator] = field(
+        default_factory=lambda: dict[str, SignalGenerator]()
+    )
     _initial_signals: dict[str, SignalValue] = field(init=False, repr=False)
     _transport: IsoTpTransport = field(init=False, repr=False)
     obd: ObdRegistry = field(init=False, repr=False)
@@ -94,6 +140,28 @@ class ECU:
         self._initial_signals = dict(self.signals)
         self._transport = IsoTpTransport(self.response_id, self.request_id)
         self.obd = ObdRegistry(self.signals)
+        generators, self.generators = self.generators, {}
+        for name, generator in generators.items():
+            self.drive(name, generator)
+
+    @property
+    def signal_map(self) -> SignalMap:
+        return cast(SignalMap, self.signals)
+
+    def drive(self, name: str, generator: SignalGenerator | None) -> None:
+        """Asocia un generador a una señal, o lo quita con ``None``.
+
+        Cada ``Vehicle.tick`` escribe ``generator(elapsed)`` acotado a los
+        límites de la señal. Cualquier callable sirve como generador custom.
+        """
+        if name not in self.signals:
+            raise KeyError(f"señal desconocida: {name}")
+        if generator is None:
+            self.generators.pop(name, None)
+        elif not callable(generator):
+            raise SimulationError("el generador debe ser callable")
+        else:
+            self.generators[name] = generator
 
     def reset(self) -> None:
         self._transport.reset()
@@ -167,14 +235,40 @@ class ECU:
         return frames[0] if frames else None
 
 
+_SIGNAL_ACTIONS = frozenset({"set", "signal"})
+_EVENT_ACTIONS = _SIGNAL_ACTIONS | FAULT_KINDS | {"clear_fault"} | set(FAULT_ALIASES)
+_FAULT_OPTIONS = frozenset({"delay", "probability", "sequence", "period"})
+
+
 @dataclass(frozen=True, slots=True)
 class ScenarioEvent:
+    """Acción programada ``at`` segundos después de iniciar el escenario.
+
+    ``action`` es ``set``, ``clear_fault`` o un tipo de fallo (ver
+    ``ecusdk.faults.FAULT_KINDS``). En fallos, ``duration`` 0 significa hasta
+    ``clear_fault`` y ``options`` lleva delay, probability, sequence o period.
+    """
+
     at: float
     ecu: str
     action: str
     signal: str | None = None
     value: SignalValue | None = None
     duration: float = 0.0
+    options: dict[str, float] = field(
+        default_factory=lambda: dict[str, float](), hash=False
+    )
+
+    def __post_init__(self) -> None:
+        if not math.isfinite(self.at) or self.at < 0:
+            raise SimulationError("at debe ser finito y no negativo")
+        if self.action not in _EVENT_ACTIONS:
+            raise SimulationError(f"acción de escenario desconocida: {self.action}")
+        if not math.isfinite(self.duration) or self.duration < 0:
+            raise SimulationError("duration debe ser finito y no negativo")
+        unknown = set(self.options) - _FAULT_OPTIONS
+        if unknown:
+            raise SimulationError(f"opciones de fallo desconocidas: {sorted(unknown)}")
 
 
 class Scenario:
@@ -192,14 +286,25 @@ class Scenario:
     def _event(event: ScenarioEvent | dict[str, Any]) -> ScenarioEvent:
         if isinstance(event, ScenarioEvent):
             return event
-        return ScenarioEvent(
-            at=float(event.get("at", event.get("time", 0))),
-            ecu=str(event["ecu"]),
-            action=str(event["action"]),
-            signal=event.get("signal"),
-            value=event.get("value"),
-            duration=float(event.get("duration", 0)),
-        )
+        known = {"at", "time", "ecu", "action", "signal", "value", "duration"}
+        options = {
+            str(key): float(value)
+            for key, value in event.items()
+            if key not in known and key != "options"
+        }
+        options.update(event.get("options", {}))
+        try:
+            return ScenarioEvent(
+                at=float(event.get("at", event.get("time", 0))),
+                ecu=str(event["ecu"]),
+                action=str(event["action"]),
+                signal=event.get("signal"),
+                value=event.get("value"),
+                duration=float(event.get("duration", 0)),
+                options=options,
+            )
+        except KeyError as error:
+            raise SimulationError(f"evento sin campo {error}") from error
 
     @property
     def started(self) -> bool:
@@ -221,14 +326,17 @@ class Scenario:
             self._origin += now - self._paused_at
         self._paused_at = None
 
-    def due(self, now: float) -> list[ScenarioEvent]:
+    def elapsed(self, now: float) -> float:
+        """Segundos de escenario transcurridos, sin contar pausas."""
         if self._origin is None:
             self.start(now)
         origin = self._origin
         assert origin is not None
-        elapsed = now - origin
-        if self._paused_at is not None:
-            elapsed = self._paused_at - origin
+        end = self._paused_at if self._paused_at is not None else now
+        return _elapsed(end - origin)
+
+    def due(self, now: float) -> list[ScenarioEvent]:
+        elapsed = self.elapsed(now)
         due: list[ScenarioEvent] = []
         while (
             self._cursor < len(self.events) and self.events[self._cursor].at <= elapsed
@@ -245,7 +353,28 @@ class Scenario:
         return cls(json.loads(value))
 
 
+def _elapsed(seconds: float) -> float:
+    # Redondear a ns hace que repetir sobre otro instante absoluto del reloj
+    # no altere qué eventos vencen por error de coma flotante.
+    return round(seconds, 9)
+
+
+def _clamp(value: SignalValue, limits: tuple[float | None, float | None]) -> float:
+    minimum, maximum = limits
+    if minimum is not None:
+        value = max(value, minimum)
+    if maximum is not None:
+        value = min(value, maximum)
+    return value
+
+
 class Vehicle:
+    """Vehículo virtual: buses, ECUs, reloj, escenario, fallos y lifecycle.
+
+    ``seed`` inicializa la aleatoriedad de los fallos (``frame_drop``); con el
+    mismo reloj, seed, escenario e inputs, una ejecución se repite exactamente.
+    """
+
     def __init__(
         self,
         name: str,
@@ -253,6 +382,8 @@ class Vehicle:
         ecus: list[ECU],
         clock: Clock | None = None,
         scenario: Scenario | None = None,
+        *,
+        seed: int = 0,
     ) -> None:
         self.name, self.buses, self.ecus = name, buses, ecus
         self.clock = clock or RealClock()
@@ -260,14 +391,44 @@ class Vehicle:
         for ecu in self.ecus:
             ecu.set_protocol_clock(self.clock)
         self.scenario = scenario
-        self._offline_until: dict[str, float] = {}
-        self._timeout_until: dict[str, float] = {}
+        self.seed = seed
+        self._rng = random.Random(seed)
+        self._faults: list[Fault] = []
+        self._delayed: list[
+            tuple[float, int, Callable[[CanFrame], None], CanFrame]
+        ] = []
+        self._order = itertools.count()
+        self._started_at: float | None = None
+        self._paused_at: float | None = None
+        self._paused_total = 0.0
         self._exchange_lock = threading.RLock()
         self._virtual_nodes: dict[str, list[tuple[ECU, VirtualCanNode]]] = {}
         self._protocol_buses: dict[int, str] = {}
         for bus in self.buses.values():
             if isinstance(bus, VirtualCanBus):
                 bus.set_clock(self.clock)
+
+    @property
+    def lock(self) -> threading.RLock:
+        """Lock reentrante que serializa transacciones y cambios de estado."""
+        return self._exchange_lock
+
+    def ecu(self, name: str) -> ECU:
+        """Busca una ECU por nombre, sin distinguir mayúsculas."""
+        for ecu in self.ecus:
+            if ecu.name == name:
+                return ecu
+        for ecu in self.ecus:
+            if ecu.name.lower() == name.lower():
+                return ecu
+        raise KeyError(f"ECU desconocida: {name}")
+
+    def elapsed(self) -> float:
+        """Segundos en ejecución desde ``start``, sin contar pausas."""
+        if self._started_at is None:
+            return 0.0
+        end = self._paused_at if self._paused_at is not None else self.clock.now()
+        return _elapsed(end - self._started_at - self._paused_total)
 
     def _connect_virtual_nodes(self) -> None:
         try:
@@ -292,11 +453,14 @@ class Vehicle:
                 port.close()
         self._virtual_nodes.clear()
         self._protocol_buses.clear()
+        self._delayed.clear()
 
     def start(self) -> None:
         with self._exchange_lock:
             self._connect_virtual_nodes()
             self.state = VehicleState.RUNNING
+            if self._started_at is None:
+                self._started_at = self.clock.now()
             if self.scenario is not None and not self.scenario.started:
                 self.scenario.start(self.clock.now())
 
@@ -308,107 +472,269 @@ class Vehicle:
                 ecu.set_protocol_clock(self.clock)
 
     def pause(self) -> None:
-        if self.state is VehicleState.RUNNING:
-            if self.scenario is not None:
-                self.scenario.pause(self.clock.now())
-            self.state = VehicleState.PAUSED
+        with self._exchange_lock:
+            if self.state is VehicleState.RUNNING:
+                now = self.clock.now()
+                if self.scenario is not None:
+                    self.scenario.pause(now)
+                self._paused_at = now
+                self.state = VehicleState.PAUSED
 
     def resume(self) -> None:
-        if self.state is VehicleState.PAUSED:
-            if self.scenario is not None:
-                self.scenario.resume(self.clock.now())
-            self.state = VehicleState.RUNNING
+        with self._exchange_lock:
+            if self.state is VehicleState.PAUSED:
+                now = self.clock.now()
+                if self.scenario is not None:
+                    self.scenario.resume(now)
+                if self._paused_at is not None:
+                    self._paused_total += now - self._paused_at
+                self._paused_at = None
+                self.state = VehicleState.RUNNING
 
     def reset(self) -> None:
-        self.stop()
-        self._offline_until.clear()
-        self._timeout_until.clear()
-        for ecu in self.ecus:
-            ecu.online = True
-            ecu.reset()
-        if self.scenario is not None:
-            self.scenario.reset()
+        """Detiene y vuelve al estado inicial: señales, fallos, seed y escenario."""
+        with self._exchange_lock:
+            self.stop()
+            self._faults.clear()
+            self._rng = random.Random(self.seed)
+            self._started_at = self._paused_at = None
+            self._paused_total = 0.0
+            for ecu in self.ecus:
+                ecu.online = True
+                ecu.signal_map.clear_overrides()
+                ecu.reset()
+            if self.scenario is not None:
+                self.scenario.reset()
 
     def tick(self) -> None:
-        """Avanza escenarios y procesa un frame por nodo ECU y sus timers."""
+        """Avanza escenario, señales y fallos; procesa un frame por nodo ECU."""
         with self._exchange_lock:
             if self.state is not VehicleState.RUNNING:
                 return
             if self.scenario is not None:
-                for event in self.scenario.due(self.clock.now()):
-                    ecu = next(
-                        (item for item in self.ecus if item.name == event.ecu), None
-                    )
-                    if ecu is None:
-                        raise KeyError(f"ECU desconocida: {event.ecu}")
-                    if event.action in ("set", "signal"):
-                        if event.signal is None or event.value is None:
-                            raise ValueError("evento de señal incompleto")
-                        ecu.set_signal(event.signal, event.value)
-                    elif event.action in ("offline", "ecu_offline"):
-                        self._offline_until[ecu.name] = (
-                            self.clock.now() + event.duration
-                        )
-                    elif event.action == "timeout":
-                        self._timeout_until[ecu.name] = (
-                            self.clock.now() + event.duration
-                        )
-
+                now = self.clock.now()
+                elapsed = self.scenario.elapsed(now)
+                for event in self.scenario.due(now):
+                    self._apply_event(event, now - (elapsed - event.at))
+            self._update_signals()
             self._service_virtual_buses()
 
+    def advance(self, seconds: float, step: float = 0.01) -> None:
+        """Duerme el reloj en pasos de ``step`` llamando a ``tick`` en cada uno.
+
+        Con ``VirtualClock`` es instantáneo y determinista.
+        """
+        if not math.isfinite(seconds) or seconds < 0 or step <= 0:
+            raise SimulationError("seconds debe ser no negativo y step positivo")
+        deadline = self.clock.now() + seconds
+        self.tick()
+        while (remaining := deadline - self.clock.now()) > 0:
+            self.clock.sleep(min(step, remaining))
+            self.tick()
+
+    def _apply_event(self, event: ScenarioEvent, at: float) -> None:
+        ecu = self.ecu(event.ecu)
+        if event.action in _SIGNAL_ACTIONS:
+            if event.signal is None or event.value is None:
+                raise SimulationError("evento de señal incompleto")
+            ecu.set_signal(event.signal, event.value)
+        elif event.action == "clear_fault":
+            self.clear_fault(ecu.name)
+        else:
+            options = event.options
+            self.inject_fault(
+                event.action,
+                ecu.name,
+                duration=event.duration or math.inf,
+                start=at,
+                signal=event.signal,
+                value=event.value,
+                delay=options.get("delay", 0.0),
+                probability=options.get("probability", 1.0),
+                sequence=int(options.get("sequence", 1)),
+                period=options.get("period", 1.0),
+            )
+
+    def inject_fault(
+        self,
+        kind: str,
+        ecu: str,
+        *,
+        duration: float = math.inf,
+        start: float | None = None,
+        signal: str | None = None,
+        value: SignalValue | None = None,
+        delay: float = 0.0,
+        probability: float = 1.0,
+        sequence: int = 1,
+        period: float = 1.0,
+    ) -> Fault:
+        """Activa un fallo durante ``duration`` segundos (indefinido por defecto).
+
+        ``sensor_frozen`` sin ``value`` congela el valor actual de la señal.
+        Devuelve el ``Fault`` registrado; ``clear_fault`` lo retira antes.
+        """
+        with self._exchange_lock:
+            target = self.ecu(ecu)
+            begin = self.clock.now() if start is None else start
+            if not duration >= 0:
+                raise SimulationError("duration debe ser no negativa")
+            if signal is not None:
+                target.get_signal(signal)
+            if FAULT_ALIASES.get(kind, kind) == "sensor_frozen" and value is None:
+                if signal is None:
+                    raise SimulationError("sensor_frozen requiere signal")
+                value = target.get_signal(signal)
+            fault = Fault(
+                kind,
+                target.name,
+                begin,
+                begin + duration,
+                signal,
+                value,
+                delay,
+                probability,
+                sequence,
+                period,
+            )
+            self._faults.append(fault)
+            self._update_signals()
+            return fault
+
+    def clear_fault(self, ecu: str, kind: str | None = None) -> None:
+        """Retira los fallos de una ECU, o sólo los de ``kind``."""
+        with self._exchange_lock:
+            name = self.ecu(ecu).name
+            kind = FAULT_ALIASES.get(kind, kind) if kind is not None else None
+            self._faults = [
+                fault
+                for fault in self._faults
+                if fault.ecu != name or (kind is not None and fault.kind != kind)
+            ]
+            self._update_signals()
+
+    def faults(self, ecu: str | None = None) -> list[Fault]:
+        """Fallos activos ahora, opcionalmente de una sola ECU."""
+        now = self.clock.now()
+        name = self.ecu(ecu).name if ecu is not None else None
+        return [
+            fault
+            for fault in self._faults
+            if fault.active(now) and (name is None or fault.ecu == name)
+        ]
+
+    def inject_timeout(self, ecu: str, duration: float) -> None:
+        """La ECU recibe pero no responde durante ``duration`` segundos."""
+        self.inject_fault("timeout", ecu, duration=duration)
+
+    def set_ecu_offline(self, ecu: str, duration: float) -> None:
+        """La ECU desaparece del bus durante ``duration`` segundos."""
+        self.inject_fault("ecu_offline", ecu, duration=duration)
+
+    def _active(self, ecu: ECU, kinds: frozenset[str]) -> list[Fault]:
+        now = self.clock.now()
+        return [
+            fault
+            for fault in self._faults
+            if fault.ecu == ecu.name and fault.kind in kinds and fault.active(now)
+        ]
+
+    def _update_signals(self) -> None:
+        now = self.clock.now()
+        self._faults = [fault for fault in self._faults if now < fault.until]
+        elapsed = self.elapsed()
+        for ecu in self.ecus:
+            signals = ecu.signal_map
+            signals.clear_overrides()
+            for name, generator in ecu.generators.items():
+                limits = ecu.signal_limits.get(name, (None, None))
+                signals[name] = _clamp(generator(elapsed), limits)
+            for fault in self._active(ecu, SENSOR_FAULTS):
+                assert fault.signal is not None
+                if fault.kind != "intermittent_signal":
+                    assert fault.value is not None
+                    signals.override(fault.signal, fault.value)
+                elif math.floor((now - fault.start) / fault.period) % 2:
+                    signals.override(fault.signal, fault.value or 0)
+
+    def _silent(self, ecu: ECU) -> bool:
+        return bool(self._active(ecu, frozenset({"timeout"})))
+
+    def _can_exchange(self, ecu: ECU, bus_name: str) -> bool:
+        return (ecu.bus is None or ecu.bus == bus_name) and not self._active(
+            ecu, frozenset({"ecu_offline"})
+        )
+
+    def _emit(
+        self, ecu: ECU, frames: list[CanFrame], send: Callable[[CanFrame], None]
+    ) -> None:
+        """Envía frames de una ECU aplicando sus fallos de frame y retardo."""
+        for fault in self._active(ecu, FRAME_FAULTS):
+            frames = [out for frame in frames for out in fault.apply(frame, self._rng)]
+        delays = self._active(ecu, DELAY_FAULTS)
+        now = self.clock.now()
+        for frame in frames:
+            delay = max((fault.frame_delay(frame) for fault in delays), default=0.0)
+            if delay > 0:
+                item = (now + delay, next(self._order), send, frame)
+                heapq.heappush(self._delayed, item)
+            else:
+                send(frame)
+
+    def _release_delayed(self) -> None:
+        now = self.clock.now()
+        while self._delayed and self._delayed[0][0] <= now:
+            _, _, send, frame = heapq.heappop(self._delayed)
+            send(frame)
+
     def _service_virtual_buses(self) -> None:
+        self._release_delayed()
         for bus_name, ports in self._virtual_nodes.items():
             for ecu, port in ports:
                 frame = port.recv(timeout=0)
-                if not self._can_exchange(
-                    ecu, bus_name
-                ) or self.clock.now() < self._timeout_until.get(ecu.name, -1):
+                if not self._can_exchange(ecu, bus_name) or self._silent(ecu):
                     continue
                 if frame is not None:
                     self._protocol_buses[id(ecu)] = bus_name
-                    for response in ecu.handle_frames(frame) or []:
-                        port.send(response)
+                    self._emit(ecu, ecu.handle_frames(frame) or [], port.send)
                 if self._protocol_buses.get(id(ecu), bus_name) == bus_name:
-                    for response in ecu.poll_frames():
-                        port.send(response)
+                    self._emit(ecu, ecu.poll_frames(), port.send)
 
-    def inject_timeout(self, ecu: str, duration: float) -> None:
-        self._timeout_until[ecu] = self.clock.now() + duration
-
-    def set_ecu_offline(self, ecu: str, duration: float) -> None:
-        self._offline_until[ecu] = self.clock.now() + duration
-
-    def _can_exchange(self, ecu: ECU, bus_name: str) -> bool:
-        return (
-            ecu.bus is None or ecu.bus == bus_name
-        ) and self.clock.now() >= self._offline_until.get(ecu.name, -1)
-
-    def exchange(self, bus_name: str, request: CanFrame) -> CanFrame | None:
-        responses = self.exchange_frames(bus_name, request)
+    def exchange(
+        self, bus_name: str, request: CanFrame, timeout: float = 0.0
+    ) -> CanFrame | None:
+        responses = self.exchange_frames(bus_name, request, timeout)
         return responses[0] if responses else None
 
-    def exchange_frames(self, bus_name: str, request: CanFrame) -> list[CanFrame]:
+    def exchange_frames(
+        self, bus_name: str, request: CanFrame, timeout: float = 0.0
+    ) -> list[CanFrame]:
+        """Envía una petición y devuelve los frames de respuesta de la ECU.
+
+        ``timeout`` es cuánto esperar con ``clock.sleep`` a una respuesta
+        retrasada o incompleta; 0 devuelve lo disponible tras procesarla.
+        """
+        if not math.isfinite(timeout) or timeout < 0:
+            raise ValueError("timeout debe ser finito y no negativo")
         # A virtual bus is shared state; serialize request/response transactions.
         with self._exchange_lock:
-            return self._exchange_frames(bus_name, request)
+            return self._exchange_frames(bus_name, request, timeout)
 
-    def _exchange_frames(self, bus_name: str, request: CanFrame) -> list[CanFrame]:
+    def _exchange_frames(
+        self, bus_name: str, request: CanFrame, timeout: float
+    ) -> list[CanFrame]:
         if self.state is not VehicleState.RUNNING:
-            raise RuntimeError("el vehículo no está ejecutándose")
+            raise VehicleStateError("el vehículo no está ejecutándose")
         self.tick()
         bus = self.buses[bus_name]
         if isinstance(bus, VirtualCanBus):
-            return self._virtual_exchange_frames(bus_name, bus, request)
+            return self._virtual_exchange_frames(bus_name, bus, request, timeout)
         bus.send(request)
         received = bus.recv(timeout=0)
         if received is None:
             return []
         for ecu in self.ecus:
-            if (
-                not self._can_exchange(ecu, bus_name)
-                or ecu.name in self._timeout_until
-                and self.clock.now() < self._timeout_until[ecu.name]
-            ):
+            if not self._can_exchange(ecu, bus_name) or self._silent(ecu):
                 continue
             responses = ecu.handle_frames(received)
             if responses is not None:
@@ -419,13 +745,15 @@ class Vehicle:
                 )
                 result: list[CanFrame] = []
                 while responses:
-                    for response in responses:
-                        bus.send(response)
+                    self._emit(ecu, responses, bus.send)
                     responses = list[CanFrame]()
                     while (response := bus.recv(timeout=0)) is not None:
                         result.append(response)
                         if response.data and response.data[0] >> 4 != 3:
-                            client.receive(response)
+                            try:
+                                client.receive(response)
+                            except IsoTpError:
+                                return result
                     for control in client.poll():
                         bus.send(control)
                         received_control = bus.recv(timeout=0)
@@ -436,7 +764,7 @@ class Vehicle:
         return []
 
     def _virtual_exchange_frames(
-        self, bus_name: str, bus: VirtualCanBus, request: CanFrame
+        self, bus_name: str, bus: VirtualCanBus, request: CanFrame, timeout: float
     ) -> list[CanFrame]:
         target = next(
             (
@@ -446,12 +774,13 @@ class Vehicle:
                 and not request.is_extended_id
                 and ecu.online
                 and self._can_exchange(ecu, bus_name)
-                and self.clock.now() >= self._timeout_until.get(ecu.name, -1)
+                and not self._silent(ecu)
             ),
             None,
         )
         filters = [CanFilter(target.response_id, 0x7FF, False)] if target else []
         driver = bus.connect(filters=filters)
+        deadline = self.clock.now() + timeout
         try:
             driver.send(request)
             self.tick()
@@ -465,16 +794,36 @@ class Vehicle:
                 while (response := driver.recv(timeout=0)) is not None:
                     result.append(response)
                     if response.data and response.data[0] >> 4 != 3:
-                        client.receive(response)
-                controls = client.poll()
-                if not controls:
+                        try:
+                            client.receive(response)
+                        except IsoTpError:
+                            return result
+                try:
+                    controls = client.poll()
+                except IsoTpError:
                     return result
                 for control in controls:
                     driver.send(control)
+                waiting = not result or client.receiver.receiving
+                if not controls and not (waiting and self._wait(deadline)):
+                    return result
                 self.tick()
         finally:
             driver.close()
 
-    def exchange_isotp(self, bus_name: str, request: CanFrame) -> bytes | None:
-        responses = self.exchange_frames(bus_name, request)
+    def _wait(self, deadline: float) -> bool:
+        """Duerme hasta el próximo frame retrasado o 1 ms; False si expiró."""
+        now = self.clock.now()
+        if now >= deadline:
+            return False
+        step = 0.001
+        if self._delayed:
+            step = max(self._delayed[0][0] - now, 0.0) or step
+        self.clock.sleep(min(step, deadline - now))
+        return True
+
+    def exchange_isotp(
+        self, bus_name: str, request: CanFrame, timeout: float = 0.0
+    ) -> bytes | None:
+        responses = self.exchange_frames(bus_name, request, timeout)
         return reassemble(responses) if responses else None

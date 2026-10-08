@@ -13,7 +13,7 @@ from queue import Empty, Queue
 from typing import Protocol, TypeAlias, cast
 
 from ecusdk.clock import Clock
-from ecusdk.errors import AdapterError
+from ecusdk.errors import AdapterError, CanError
 
 _CAN_FRAME = struct.Struct("=IB3x8s")
 _CAN_EFF_FLAG = 0x80000000
@@ -51,9 +51,9 @@ class CanFrame:
         object.__setattr__(self, "data", bytes(self.data))
         maximum = 0x1FFFFFFF if self.is_extended_id else 0x7FF
         if not 0 <= self.arbitration_id <= maximum:
-            raise ValueError("arbitration_id fuera de rango")
+            raise CanError("arbitration_id fuera de rango")
         if len(self.data) > 8:
-            raise ValueError("un frame CAN 2.0 admite como máximo 8 bytes")
+            raise CanError("un frame CAN 2.0 admite como máximo 8 bytes")
 
 
 class CanBus(Protocol):
@@ -75,13 +75,13 @@ class CanFilter:
             type(self.arbitration_id) is not int
             or not 0 <= self.arbitration_id <= _CAN_EFF_MASK
         ):
-            raise ValueError("arbitration_id de filtro fuera de rango")
+            raise CanError("arbitration_id de filtro fuera de rango")
         if type(self.mask) is not int or not 0 <= self.mask <= _CAN_EFF_MASK:
-            raise ValueError("mask de filtro fuera de rango")
+            raise CanError("mask de filtro fuera de rango")
         if self.is_extended_id is not None and type(self.is_extended_id) is not bool:
-            raise ValueError("is_extended_id debe ser bool o None")
+            raise CanError("is_extended_id debe ser bool o None")
         if self.is_extended_id is False and self.arbitration_id > 0x7FF:
-            raise ValueError("arbitration_id fuera de rango para CAN estándar")
+            raise CanError("arbitration_id fuera de rango para CAN estándar")
 
     def matches(self, frame: CanFrame) -> bool:
         return (
