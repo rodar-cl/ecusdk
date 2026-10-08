@@ -102,8 +102,10 @@ def test_cars_new_copy_delete(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -
             assert isinstance(cars, CarsScreen)
             assert "Crear" in str(cars.query_one("#card", Static).content)
             await pilot.press("enter")
+            await pilot.pause()
             assert isinstance(app.screen, CustomizeScreen)
             await pilot.click("#next")
+            await pilot.pause()
             assert app.screen is cars
             assert load_vehicle(home / "mi-auto.toml").name == "Mi auto"
             await pilot.press("c")
@@ -116,8 +118,10 @@ def test_cars_new_copy_delete(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -
             await pilot.pause()
             assert "problema" in str(cars.query_one("#card", Static).content)
             await pilot.click("#next")
+            await pilot.pause()
             assert app.screen is cars
             await pilot.press("escape")
+            await pilot.pause()
 
     asyncio.run(scenario())
 
@@ -129,6 +133,7 @@ def test_customize_edits_adds_and_drops(tmp_path: Path) -> None:
         app = EcusdkApp([path], home=tmp_path / "home")
         async with app.run_test(size=(130, 40)) as pilot:
             await pilot.press("p")
+            await pilot.pause()
             screen = app.screen
             assert isinstance(screen, CustomizeScreen)
             screen.query_one("#name", Input).value = "Mi demo"
@@ -139,10 +144,12 @@ def test_customize_edits_adds_and_drops(tmp_path: Path) -> None:
             await pilot.pause()
             screen.query_one("#value-0", Input).value = "abc"
             await pilot.click("#next")
+            await pilot.pause()
             assert app.screen is screen
             await pilot.pause(0.3)  # el botón ignora clics durante su animación
             screen.query_one("#value-0", Input).value = "3000"
             await pilot.click("#next")
+            await pilot.pause()
             assert isinstance(app.screen, CarsScreen)
         vehicle = load_vehicle(path)
         ecm = vehicle.ecu("ecm")
@@ -165,7 +172,9 @@ def test_advanced_editor(tmp_path: Path) -> None:
         app = EcusdkApp([path], home=tmp_path / "home")
         async with app.run_test(size=(130, 40)) as pilot:
             await pilot.press("p")
+            await pilot.pause()
             await pilot.click("#advanced")
+            await pilot.pause()
             editor = app.screen
             assert isinstance(editor, EditorScreen)
             tree = cast(Tree[Any], editor.query_one("#tree", Tree))
@@ -197,10 +206,12 @@ def test_wizard_launches_and_controls(tmp_path: Path) -> None:
         app = EcusdkApp([DEMO], home=tmp_path)
         async with app.run_test(size=(130, 44)) as pilot:
             await pilot.click("#next")
+            await pilot.pause()
             connection = app.screen
             assert isinstance(connection, ConnectionScreen)
             connection.query_one("#port", Input).value = "x"
             await pilot.click("#next")
+            await pilot.pause()
             assert app.screen is connection
             await pilot.pause(0.3)
             connection.query_one("#port", Input).value = str(_free_port())
@@ -209,9 +220,11 @@ def test_wizard_launches_and_controls(tmp_path: Path) -> None:
             record = tmp_path / "s.eculog"
             connection.query_one("#record-path", Input).value = str(record)
             await pilot.click("#next")
+            await pilot.pause()
             assert isinstance(app.screen, SummaryScreen)
             assert "demo-car" in str(app.screen.query_one("#summary", Static).content)
             await pilot.click("#next")
+            await pilot.pause()
             dash = app.screen
             assert isinstance(dash, DashboardScreen)
             table = cast(DataTable[str], dash.query_one("#signals", DataTable))
@@ -234,11 +247,13 @@ def test_wizard_launches_and_controls(tmp_path: Path) -> None:
             process = dash.process
             assert process is not None
             await pilot.click("#next")
+            await pilot.pause()
             await asyncio.wait_for(process.wait(), 10)
             await pilot.pause(0.5)
             assert "detenida" in str(dash.query_one("#banner", Static).content)
             assert "4000" in "\n".join(dash.query_one(Log).lines)
             await pilot.press("escape")
+            await pilot.pause()
             assert isinstance(app.screen, CarsScreen)
         assert record.exists()
 
