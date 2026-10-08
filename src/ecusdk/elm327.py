@@ -44,15 +44,19 @@ class TcpTransport:
 
     @classmethod
     def connect(cls, host: str, port: int, timeout: float = 5.0) -> TcpTransport:
+        """Abre una conexión TCP de cliente."""
         return cls(socket.create_connection((host, port), timeout))
 
     def read(self, size: int = 4096) -> bytes:
+        """Lee hasta ``size`` bytes; ``b''`` indica EOF."""
         return self._socket.recv(size)
 
     def write(self, data: bytes) -> None:
+        """Envía todos los bytes."""
         self._socket.sendall(data)
 
     def close(self) -> None:
+        """Cierra la conexión."""
         self._socket.close()
 
 
@@ -78,9 +82,11 @@ class PtySerialTransport:
 
     @property
     def slave_name(self) -> str:
+        """Ruta del pseudo-terminal al que se conecta el cliente."""
         return self._ttyname(self.slave)
 
     def read(self, size: int = 4096) -> bytes:
+        """Lee bytes del cliente; devuelve ``b''`` tras ``close``."""
         try:
             return os.read(self.master, size)
         except OSError:
@@ -89,9 +95,11 @@ class PtySerialTransport:
             raise
 
     def write(self, data: bytes) -> None:
+        """Escribe bytes hacia el cliente."""
         os.write(self.master, data)
 
     def close(self) -> None:
+        """Cierra ambos extremos del pseudo-terminal; es idempotente."""
         if self._closed:
             return
         self._closed = True
@@ -154,6 +162,7 @@ class Elm327Emulator:
         return Elm327Emulator(self.vehicle, self.bus, self.timeout)
 
     def command(self, command: str) -> str:
+        """Ejecuta un comando AT u OBD y devuelve la respuesta con prompt ``>``."""
         text = command.strip().upper().replace(" ", "")
         if text in ("ATZ", "ATWS", "ATD"):
             self._defaults()
@@ -215,6 +224,8 @@ class Elm327Emulator:
         return "\r".join(lines) + "\r\r>"
 
     def serve(self, transport: ByteTransport) -> None:
+        """Atiende comandos de ``transport`` hasta EOF y luego lo cierra."""
+
         def handle(command: str) -> str:
             return (command if self.echo else "") + self.command(command)
 
@@ -242,6 +253,7 @@ class TcpServer:
         self._stop = threading.Event()
 
     def serve_forever(self) -> None:
+        """Acepta conexiones hasta ``close``; bloquea el hilo que lo llama."""
         server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         server.bind((self.host, self.port))
@@ -268,6 +280,7 @@ class TcpServer:
             server.close()
 
     def close(self) -> None:
+        """Detiene ``serve_forever`` y libera el socket de escucha."""
         self._stop.set()
         if self._socket is not None:
             self._socket.close()

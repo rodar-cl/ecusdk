@@ -15,16 +15,20 @@ class DtcStore:
     codes: set[str] = field(default_factory=lambda: set[str]())
 
     def add(self, code: str) -> None:
+        """Añade un DTC como ``P0301``; ValueError si el formato es inválido."""
         _validate_dtc(code)
         self.codes.add(code.upper())
 
     def remove(self, code: str) -> None:
+        """Quita un DTC si existe."""
         self.codes.discard(code.upper())
 
     def clear(self) -> None:
+        """Borra todos los DTCs (Mode 04)."""
         self.codes.clear()
 
     def list(self) -> list[str]:
+        """DTCs almacenados, ordenados."""
         return sorted(self.codes)
 
 

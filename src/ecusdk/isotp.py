@@ -122,6 +122,7 @@ class IsoTpReceiver:
         return self._finish_if_complete()
 
     def check_timeout(self) -> None:
+        """Cancela la recepción y lanza IsoTpTimeoutError si venció."""
         if self._deadline is not None and self.clock.now() >= self._deadline:
             self._reset()
             raise IsoTpTimeoutError("timeout esperando un frame ISO-TP")

@@ -7,10 +7,13 @@ import threading
 import time
 
 from ecusdk import (
+    ECU,
     CanFrame,
     Elm327Emulator,
     IsoTpTransport,
     TcpElm327Server,
+    Vehicle,
+    VirtualCanBus,
     VirtualClock,
 )
 from ecusdk.config import load_vehicle
@@ -41,6 +44,16 @@ report("OBD 01 0C (single frame)", timed(lambda: vehicle.exchange(bus, rpm), 200
 report(
     "OBD 09 02 VIN (multi-frame)", timed(lambda: vehicle.exchange_isotp(bus, vin), 5000)
 )
+
+ecus = [ECU(f"ecu{i}", 0x700 + i, 0x780 + i, {"rpm": 850}) for i in range(20)]
+fleet = Vehicle("fleet", {"can": VirtualCanBus()}, ecus)
+fleet.start()
+fleet_requests = [CanFrame(e.request_id, bytes.fromhex("02 01 0C")) for e in ecus]
+frames, started = 0, time.perf_counter()
+for index in range(20000):
+    frames += 1 + len(fleet.exchange_frames("can", fleet_requests[index % 20]))
+rate = frames / (time.perf_counter() - started)
+print(f"{'20 ECUs, un bus (PRD §56)':<32} {rate:,.0f} frames/s")
 
 clock = VirtualClock()
 tx = IsoTpTransport(0x700, 0x701, clock=clock)

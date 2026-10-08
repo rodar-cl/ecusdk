@@ -4,7 +4,7 @@ build-backend = "uv_build"
 
 [project]
 name = "ecusdk"
-version = "0.1.0.dev0"
+version = "0.1.0"
 description = "Sandbox automotriz programable para simular ECUs y redes vehiculares."
 readme = "README.md"
 requires-python = ">=3.11"

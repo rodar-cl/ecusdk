@@ -57,9 +57,15 @@ class CanFrame:
 
 
 class CanBus(Protocol):
-    def send(self, frame: CanFrame) -> None: ...
+    """Contrato mínimo de un bus CAN: enviar y recibir frames."""
 
-    def recv(self, timeout: float | None = None) -> CanFrame | None: ...
+    def send(self, frame: CanFrame) -> None:
+        """Publica un frame en el bus."""
+        ...
+
+    def recv(self, timeout: float | None = None) -> CanFrame | None:
+        """Recibe un frame o ``None`` si vence ``timeout`` (``None``: sin límite)."""
+        ...
 
 
 @dataclass(frozen=True, slots=True)
@@ -84,6 +90,7 @@ class CanFilter:
             raise CanError("arbitration_id fuera de rango para CAN estándar")
 
     def matches(self, frame: CanFrame) -> bool:
+        """Indica si el frame pasa el filtro de ID, máscara y tipo de ID."""
         return (
             self.is_extended_id is None or self.is_extended_id == frame.is_extended_id
         ) and frame.arbitration_id & self.mask == self.arbitration_id & self.mask
@@ -112,6 +119,7 @@ class VirtualCanNode:
         self._bus._send(frame, sender=self)
 
     def recv(self, timeout: float | None = None) -> CanFrame | None:
+        """Recibe de la cola del nodo; ``None`` al agotar ``timeout``."""
         with self._bus._lock:
             if self._closed:
                 raise AdapterError("nodo CAN virtual cerrado")
@@ -316,12 +324,14 @@ class SocketCanBus:
         return CanFrame(identifier, data[:dlc], is_extended_id=extended)
 
     def send(self, frame: CanFrame) -> None:
+        """Envía un frame por la interfaz; errores del sistema como AdapterError."""
         try:
             self._socket.sendall(self._pack(frame))
         except OSError as error:
             raise AdapterError("falló el envío por SocketCAN") from error
 
     def recv(self, timeout: float | None = None) -> CanFrame | None:
+        """Recibe un frame o ``None`` al agotar ``timeout``."""
         try:
             self._socket.settimeout(timeout)
             return self._unpack(self._socket.recv(_CAN_FRAME.size))
@@ -331,6 +341,7 @@ class SocketCanBus:
             raise AdapterError("falló la recepción por SocketCAN") from error
 
     def close(self) -> None:
+        """Cierra el socket CAN."""
         try:
             self._socket.close()
         except OSError as error:
