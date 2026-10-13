@@ -81,8 +81,17 @@ async def _on(pilot: Any, app: EcusdkApp, kind: type[S]) -> S:
 
 
 async def _click(pilot: Any, selector: str) -> None:
-    """Clic que falla claro si no cae sobre el widget (layout o scroll)."""
-    assert await pilot.click(selector), f"el clic no cayó en {selector}"
+    """Clic que falla claro si no cae sobre el widget (layout o scroll).
+
+    Un widget recién visible puede no tener aún su región final (el layout se
+    recalcula en el siguiente refresco), sobre todo en runners macOS lentos:
+    se reintenta unos instantes antes de darlo por fallido.
+    """
+    for _ in range(50):
+        if await pilot.click(selector):
+            return
+        await pilot.pause(0.1)
+    raise AssertionError(f"el clic no cayó en {selector}")
 
 
 def _car(tmp_path: Path) -> Path:
