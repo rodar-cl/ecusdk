@@ -6,6 +6,7 @@ import importlib
 import os
 import re
 import socket
+import sys
 import threading
 from collections.abc import Callable
 from typing import Protocol, cast
@@ -339,7 +340,11 @@ class TcpServer:
         """
         server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         try:
-            server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            if sys.platform == "win32":
+                # En Windows SO_REUSEADDR deja abrir un puerto ya en uso.
+                server.setsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1)
+            else:
+                server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
             server.bind((self.host, self.port))
             server.listen()
         except OSError:
