@@ -18,6 +18,8 @@ from ecusdk.errors import AdapterError, CanError
 _CAN_FRAME = struct.Struct("=IB3x8s")
 _CAN_EFF_FLAG = 0x80000000
 _CAN_EFF_MASK = 0x1FFFFFFF
+# Frames que retiene el tap pasivo del bus; los más antiguos se descartan.
+TAP_LIMIT = 4096
 
 
 class _Socket(Protocol):
@@ -216,7 +218,10 @@ class VirtualCanBus:
                     frame.is_extended_id,
                     self._clock.now(),
                 )
-            # Bus receive is a passive tap and retains its historical loopback behavior.
+            # Bus receive is a passive tap and retains its historical loopback
+            # behavior; bounded because the simulation itself never reads it.
+            if self._frames.qsize() >= TAP_LIMIT:
+                self._frames.get_nowait()
             self._frames.put(frame)
             for node in tuple(self._nodes):
                 if node._closed or (node is sender and not node._receive_own_messages):

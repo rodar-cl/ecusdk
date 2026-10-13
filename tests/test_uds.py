@@ -197,8 +197,10 @@ def test_toml_dids(tmp_path: Path) -> None:
 def test_elm327_and_shell_send_uds() -> None:
     vehicle, _, _ = make_vehicle()
     elm = Elm327Emulator(vehicle)
+    vin = VIN.encode()
     assert elm.command("22F190") == (
-        "62 F1 90 " + VIN.encode().hex(" ").upper() + "\r\r>"
+        f"014\r0: 62 F1 90 {vin[:3].hex(' ').upper()}"
+        f"\r1: {vin[3:10].hex(' ').upper()}\r2: {vin[10:].hex(' ').upper()}\r\r>"
     )
     assert elm.command("1003") == "50 03 00 32 01 F4\r\r>"
     assert elm.command("3E80") == "NO DATA\r\r>"

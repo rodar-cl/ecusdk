@@ -6,12 +6,14 @@ import importlib
 import os
 import re
 import socket
+import sys
 import threading
 from collections.abc import Callable
 from typing import Protocol, cast
 
 from ecusdk.can import CanFrame
 from ecusdk.errors import ProtocolError
+from ecusdk.isotp import reassemble
 from ecusdk.simulation import Vehicle
 
 OpenPty = Callable[[], tuple[int, int]]
@@ -109,37 +111,74 @@ class PtySerialTransport:
             os.close(self.master)
 
 
+MAX_LINE = 1024
+_EOL = re.compile(rb"[\r\n]")
+
+
 def serve_lines(transport: ByteTransport, handler: Callable[[str], str]) -> None:
-    """Lee líneas terminadas en CR/LF, escribe ``handler(línea)`` y cierra al EOF."""
+    """Lee líneas terminadas en CR/LF, escribe ``handler(línea)`` y cierra al EOF.
+
+    Una línea de más de ``MAX_LINE`` bytes se entrega truncada y el resto se
+    descarta, para que un cliente no pueda agotar la memoria.
+    """
+
+    def respond(raw: bytes) -> None:
+        if raw:
+            response = handler(raw.decode("utf-8", "replace"))
+            transport.write(response.encode("utf-8"))
+
     try:
         buffer = bytearray()
+        overflow = False
         while True:
             chunk = transport.read()
             if not chunk:
                 return
             buffer.extend(chunk)
-            while b"\r" in buffer or b"\n" in buffer:
-                index = next(i for i, value in enumerate(buffer) if value in (10, 13))
-                raw = bytes(buffer[:index])
-                del buffer[: index + 1]
-                if raw:
-                    response = handler(raw.decode("utf-8", "replace"))
-                    transport.write(response.encode("utf-8"))
+            while (match := _EOL.search(buffer)) is not None:
+                raw = bytes(buffer[: match.start()])
+                del buffer[: match.end()]
+                if not overflow:
+                    respond(raw)
+                overflow = False
+            if len(buffer) > MAX_LINE:
+                if not overflow:
+                    respond(bytes(buffer[:MAX_LINE]))
+                buffer.clear()
+                overflow = True
     finally:
         transport.close()
 
 
-_REQUEST = re.compile(r"(?:[0-9A-F]{2}){1,7}")
+_REQUEST = re.compile(r"((?:[0-9A-F]{2}){1,7})([0-9A-F]?)")
+_FUNCTIONAL = 0x7DF
+# Los buses del simulador son siempre CAN 11 bits; el resto se acepta para
+# que los clientes puedan fijar el protocolo como harían con un auto real.
+_PROTOCOLS = {
+    "1": "SAE J1850 PWM",
+    "2": "SAE J1850 VPW",
+    "3": "ISO 9141-2",
+    "4": "ISO 14230-4 (KWP 5BAUD)",
+    "5": "ISO 14230-4 (KWP FAST)",
+    "6": "ISO 15765-4 (CAN 11/500)",
+    "7": "ISO 15765-4 (CAN 29/500)",
+    "8": "ISO 15765-4 (CAN 11/250)",
+    "9": "ISO 15765-4 (CAN 29/250)",
+    "A": "SAE J1939 (CAN 29/250)",
+    "B": "USER1 (CAN 11/125)",
+    "C": "USER2 (CAN 11/50)",
+}
 _NO_OP_AT = re.compile(r"AT(?:L[01]|AT[0-2]|M[01]|CAF[01]|ST[0-9A-F]{2}|AL|NL)")
 
 
 class Elm327Emulator:
     """Subconjunto ELM327 v1.5 sobre las ECUs de un bus del vehículo.
 
-    Sin ``ATSH`` las consultas son funcionales: se envían a cada ECU del bus
-    y se imprime una línea por ECU que responde. ``ATSH 7E0`` dirige las
-    consultas sólo a la ECU con ese ``request_id``. ``timeout`` es la espera
-    por respuesta de cada ECU, en segundos del reloj del vehículo.
+    Sin ``ATSH`` (o con ``ATSH 7DF``) las consultas son funcionales: se envían
+    a cada ECU del bus y se imprimen las respuestas de todas. ``ATSH 7E0``
+    dirige las consultas sólo a la ECU con ese ``request_id``. Un dígito
+    final (``010C1``) limita la cantidad de ECUs que responden. ``timeout`` es
+    la espera por respuesta de cada ECU, en segundos del reloj del vehículo.
     """
 
     def __init__(
@@ -154,7 +193,7 @@ class Elm327Emulator:
         self.echo = True
         self.headers = False
         self.spaces = True
-        self.protocol = "AUTO"
+        self.protocol: str | None = None  # None: automático
         self.header: int | None = None
 
     def session(self) -> Elm327Emulator:
@@ -169,6 +208,8 @@ class Elm327Emulator:
             return "ELM327 v1.5\r\r>" if text != "ATD" else "OK\r\r>"
         if text == "ATI":
             return "ELM327 v1.5\r\r>"
+        if text == "ATRV":
+            return "12.6V\r\r>"
         settings = {
             "ATE0": ("echo", False),
             "ATE1": ("echo", True),
@@ -180,21 +221,28 @@ class Elm327Emulator:
         if text in settings:
             setattr(self, *settings[text])
             return "OK\r\r>"
-        if text.startswith("ATSP"):
-            self.protocol = text[4:] or "AUTO"
+        if protocol := re.fullmatch(r"ATSPA?([0-9A-C])", text):
+            auto = text.startswith("ATSPA") or protocol[1] == "0"
+            self.protocol = None if auto else protocol[1]
             return "OK\r\r>"
         if text == "ATDP":
-            return f"{self.protocol}\r\r>"
+            if self.protocol is None:
+                return f"AUTO, {_PROTOCOLS['6']}\r\r>"
+            return f"{_PROTOCOLS[self.protocol]}\r\r>"
+        if text == "ATDPN":
+            return f"{self.protocol or 'A6'}\r\r>"
         if text.startswith("ATSH") and re.fullmatch(r"[0-9A-F]{3}", text[4:]):
-            self.header = int(text[4:], 16)
+            header = int(text[4:], 16)
+            self.header = None if header == _FUNCTIONAL else header
             return "OK\r\r>"
         if _NO_OP_AT.fullmatch(text):
             return "OK\r\r>"
-        if _REQUEST.fullmatch(text):
-            return self._query(bytes.fromhex(text))
+        if request := _REQUEST.fullmatch(text):
+            limit = int(request[2], 16) if request[2] else 0
+            return self._query(bytes.fromhex(request[1]), limit)
         return "?\r\r>"
 
-    def _query(self, request: bytes) -> str:
+    def _query(self, request: bytes, limit: int = 0) -> str:
         ecus = [
             ecu
             for ecu in self.vehicle.ecus
@@ -205,8 +253,16 @@ class Elm327Emulator:
         failed = False
         for ecu in ecus:
             frame = CanFrame(ecu.request_id, bytes((len(request),)) + request)
+            frames: list[CanFrame] = []
             try:
-                payload = self.vehicle.exchange_isotp(self.bus, frame, self.timeout)
+                frames = [
+                    response
+                    for response in self.vehicle.exchange_frames(
+                        self.bus, frame, self.timeout
+                    )
+                    if response.arbitration_id == ecu.response_id
+                ]
+                payload = reassemble(frames) if frames else None
             except ProtocolError:
                 failed = True
                 continue
@@ -214,14 +270,33 @@ class Elm327Emulator:
                 payload = None
             if payload is None:
                 continue
-            separator = " " if self.spaces else ""
-            line = (payload.hex(" ") if self.spaces else payload.hex()).upper()
-            if self.headers:
-                line = f"{ecu.response_id:03X}{separator * 2}{line}"
-            lines.append(line)
+            lines.extend(self._format(ecu.response_id, frames, payload))
+            limit -= 1
+            if limit == 0:
+                break
         if not lines:
             lines.append("CAN ERROR" if failed else "NO DATA")
         return "\r".join(lines) + "\r\r>"
+
+    def _format(
+        self, response_id: int, frames: list[CanFrame], payload: bytes
+    ) -> list[str]:
+        """Formatea como un ELM327 con CAN 11 bits y formato automático (CAF1)."""
+        separator = " " if self.spaces else ""
+
+        def hexs(data: bytes) -> str:
+            return (data.hex(" ") if self.spaces else data.hex()).upper()
+
+        if self.headers:
+            # Con cabeceras se muestra cada frame completo, incluido el PCI.
+            return [f"{response_id:03X}{separator}{hexs(f.data)}" for f in frames]
+        if len(frames) == 1:
+            return [hexs(payload)]
+        lines = [f"{len(payload):03X}"]
+        for index, frame in enumerate(frames):
+            data = frame.data[2:] if index == 0 else frame.data[1:]
+            lines.append(f"{index & 0xF:X}:{separator}{hexs(data)}")
+        return lines
 
     def serve(self, transport: ByteTransport) -> None:
         """Atiende comandos de ``transport`` hasta EOF y luego lo cierra."""
@@ -240,27 +315,56 @@ class LineService(Protocol):
 
 
 class TcpServer:
-    """Blocking TCP server; one thread per connection.
+    """Blocking TCP server; one thread per connection, up to ``max_clients``.
 
     Call ``close`` from the owning application.
     """
 
     def __init__(
-        self, emulator: LineService, host: str = "127.0.0.1", port: int = 0
+        self,
+        emulator: LineService,
+        host: str = "127.0.0.1",
+        port: int = 0,
+        max_clients: int = 16,
     ) -> None:
         self.emulator, self.host, self.port = emulator, host, port
         self._socket: socket.socket | None = None
         self._stop = threading.Event()
+        self._slots = threading.BoundedSemaphore(max_clients)
 
-    def serve_forever(self) -> None:
-        """Acepta conexiones hasta ``close``; bloquea el hilo que lo llama."""
+    def bind(self) -> None:
+        """Abre el socket de escucha; ``port`` pasa a ser el puerto real.
+
+        Llamarlo antes de ``serve_forever`` permite detectar un puerto ocupado
+        en el hilo que arranca el servidor.
+        """
         server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        server.bind((self.host, self.port))
-        server.listen()
+        try:
+            if sys.platform == "win32":
+                # En Windows SO_REUSEADDR deja abrir un puerto ya en uso.
+                server.setsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1)
+            else:
+                server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            server.bind((self.host, self.port))
+            server.listen()
+        except OSError:
+            server.close()
+            raise
         server.settimeout(0.2)
         self._socket = server
         self.port = int(server.getsockname()[1])
+
+    def _serve_client(self, connection: socket.socket) -> None:
+        try:
+            self.emulator.session().serve(TcpTransport(connection))
+        finally:
+            self._slots.release()
+
+    def serve_forever(self) -> None:
+        """Acepta conexiones hasta ``close``; bloquea el hilo que lo llama."""
+        if self._socket is None:
+            self.bind()
+        server = cast(socket.socket, self._socket)
         try:
             while not self._stop.is_set():
                 try:
@@ -271,10 +375,11 @@ class TcpServer:
                     if self._stop.is_set():
                         break
                     raise
+                if not self._slots.acquire(blocking=False):
+                    connection.close()  # demasiados clientes simultáneos
+                    continue
                 threading.Thread(
-                    target=self.emulator.session().serve,
-                    args=(TcpTransport(connection),),
-                    daemon=True,
+                    target=self._serve_client, args=(connection,), daemon=True
                 ).start()
         finally:
             server.close()

@@ -110,7 +110,7 @@ def test_ble_serves_elm327_in_chunks(monkeypatch: pytest.MonkeyPatch) -> None:
     assert all(len(piece) <= 8 for piece in server.sent)
     joined = b"".join(server.sent)
     assert b"OK" in joined
-    assert b"45 43 55 53 44 4B" in joined  # VIN "ECUSDK..." por 0902
+    assert b"0: 49 02 01 45 43 55\r1: 53 44 4B" in joined  # VIN "ECUSDK..." por 0902
     assert server.stopped
 
 

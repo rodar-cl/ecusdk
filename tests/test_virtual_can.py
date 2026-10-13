@@ -5,7 +5,7 @@ from typing import cast
 
 import pytest
 
-from ecusdk.can import CanFilter, CanFrame, VirtualCanBus
+from ecusdk.can import TAP_LIMIT, CanFilter, CanFrame, VirtualCanBus
 from ecusdk.clock import VirtualClock
 from ecusdk.errors import AdapterError
 
@@ -237,3 +237,11 @@ class _SignallingQueue(Queue[CanFrame | object]):
     ) -> CanFrame | object:
         self.get_started.set()
         return super().get(block=block, timeout=timeout)
+
+
+def test_passive_tap_keeps_only_latest_frames() -> None:
+    bus = VirtualCanBus()
+    for index in range(TAP_LIMIT + 10):
+        bus.send(CanFrame(0x100, index.to_bytes(2, "big")))
+    assert bus.recv(timeout=0) == CanFrame(0x100, (10).to_bytes(2, "big"))
+    assert bus._frames.qsize() == TAP_LIMIT - 1  # pyright: ignore[reportPrivateUsage]

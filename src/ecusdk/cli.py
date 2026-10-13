@@ -38,8 +38,13 @@ def main(argv: list[str] | None = None) -> int:
     run = commands.add_parser("run", help="ejecutar un vehículo virtual")
     run.add_argument("config")
     run.add_argument("--request", default=None, help="consulta OBD en hexadecimal")
-    run.add_argument("--host", default="127.0.0.1")
+    run.add_argument("--host", default="127.0.0.1", help="interfaz del ELM327 TCP")
     run.add_argument("--port", type=int, default=35000, help="puerto ELM327 TCP")
+    run.add_argument(
+        "--control-host",
+        default="127.0.0.1",
+        help="interfaz del shell de control (sin autenticación; no la expongas)",
+    )
     run.add_argument(
         "--control-port",
         type=int,
@@ -169,10 +174,22 @@ def _serve(args: argparse.Namespace, vehicle: Vehicle) -> int:
         return 0
     servers = [TcpServer(Elm327Emulator(vehicle), args.host, args.port)]
     if args.control_port:
-        servers.append(TcpServer(VehicleShell(vehicle), args.host, args.control_port))
+        servers.append(
+            TcpServer(VehicleShell(vehicle), args.control_host, args.control_port)
+        )
+    for server in servers:
+        try:
+            server.bind()
+        except OSError as error:
+            print(f"ecusdk: no se pudo abrir {server.host}:{server.port}: {error}")
+            for opened in servers:
+                opened.close()
+            vehicle.stop()
+            return 1
+    if args.control_port:
         threading.Thread(target=servers[1].serve_forever, daemon=True).start()
-        print(f"control: {args.host}:{args.control_port}")
-    print(f"ELM327: {args.host}:{args.port}")
+        print(f"control: {servers[1].host}:{servers[1].port}")
+    print(f"ELM327: {servers[0].host}:{servers[0].port}")
     if args.ble:
         threading.Thread(target=servers[0].serve_forever, daemon=True).start()
         print(f"BLE: {args.ble_name}")

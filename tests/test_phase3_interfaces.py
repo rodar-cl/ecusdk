@@ -137,11 +137,11 @@ def test_elm327_functional_and_physical_addressing() -> None:
     vehicle, clock = two_ecu_vehicle()
     elm = Elm327Emulator(vehicle)
     assert elm.command("ATH1") == "OK\r\r>"
-    assert elm.command("010D") == "7E8  41 0D 0A\r7E9  41 0D 14\r\r>"
+    assert elm.command("010D") == "7E8 03 41 0D 0A\r7E9 03 41 0D 14\r\r>"
     assert elm.command("ATSH7E1") == "OK\r\r>"
-    assert elm.command("01 0D") == "7E9  41 0D 14\r\r>"
+    assert elm.command("01 0D") == "7E9 03 41 0D 14\r\r>"
     assert elm.command("ATS0") == "OK\r\r>"
-    assert elm.command("010D") == "7E9410D14\r\r>"
+    assert elm.command("010D") == "7E903410D14\r\r>"
     assert elm.command("ATD") == "OK\r\r>"
     assert elm.command("0105") == "NO DATA\r\r>"
     assert clock.now() == pytest.approx(0.4)  # espera ATST por cada ECU
@@ -280,6 +280,7 @@ def test_cli_run_serves_elm_and_control(monkeypatch: pytest.MonkeyPatch) -> None
             raise KeyboardInterrupt
 
     monkeypatch.setattr(TcpServer, "serve_forever", fake_serve)
+    monkeypatch.setattr(TcpServer, "bind", lambda self: None)  # pyright: ignore[reportUnknownLambdaType, reportUnknownArgumentType]
     assert main(["run", SCENARIO_CAR, "--port", "0", "--control-port", "0"]) == 0
     assert started == ["Elm327Emulator"]
     assert main(["run", SCENARIO_CAR, "--port", "0", "--control-port", "9"]) == 0
