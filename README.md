@@ -263,6 +263,8 @@ El entorno virtual está orientado a desarrollo, aprendizaje y pruebas. El bus p
 
 ECUSDK se distribuye bajo **PolyForm Noncommercial License 1.0.0**. La licencia permite los usos no comerciales definidos en sus términos; el uso comercial requiere una licencia independiente de Rodar. Lee el texto completo en [`LICENSE`](./LICENSE).
 
+Required Notice: Copyright Rodar (https://rodar.cl)
+
 ## Rodar
 
 ECUSDK es desarrollado por [Rodar](https://rodar.cl) y se comparte con la comunidad como herramienta para aprender, experimentar y construir mejor software automotriz.

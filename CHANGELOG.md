@@ -18,8 +18,8 @@
   (`43 01 03 01`), como exige ISO 15765-4 en CAN.
 - ELM327: con eco activo, el comando eco termina en `\r` como en un adaptador
   real, en vez de pegarse a la respuesta (`ATZELM327 v1.5`).
-- Prueba de contrato con la app Rodar (`tests/test_elm327_session.py`): `ATZ`,
-  comando desconocido tratado sin romper la sesión; VIN y DTCs siguen disponibles.
+- Prueba de sesión ELM327 por TCP (`tests/test_elm327_session.py`): `ATZ`,
+  comando desconocido, VIN y DTCs.
 - Grabación de sesiones en `.eculog` v1 (JSON Lines, documentado en
   `docs/recording.md`): frames de buses virtuales, peticiones y respuestas
   OBD/UDS reensambladas, señales, DTCs, fallos, eventos de escenario y
