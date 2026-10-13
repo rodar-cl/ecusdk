@@ -108,5 +108,5 @@ def test_config_and_elm_unknown_commands() -> None:
     assert emulator.command("ATE0").startswith("OK")
     assert emulator.command("ATH1").startswith("OK")
     assert emulator.command("ATSP6").startswith("OK")
-    assert emulator.command("ATDP").startswith("6")
+    assert emulator.command("ATDP") == "ISO 15765-4 (CAN 11/500)\r\r>"
     assert emulator.command("NOPE").startswith("?")

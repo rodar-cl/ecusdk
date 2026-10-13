@@ -99,13 +99,27 @@ siguiente transacción, como en un bus real.
 
 ## ELM327 y shell de control
 
-Sin `ATSH`, una consulta es funcional: se envía a cada ECU del bus y se
-imprime una línea por respuesta. `ATSH 7E1` la dirige a una sola ECU. La espera
-por ECU es `Elm327Emulator(timeout=0.2)`, el valor por defecto de `ATST`. Un
-error ISO-TP se informa como `CAN ERROR`. `ATS0/ATS1` quita o pone los
-espacios; `ATL`, `ATST`, `ATAT`, `ATM`, `ATCAF`, `ATAL` y `ATNL` se aceptan sin
-efecto.
+Sin `ATSH` (o con `ATSH 7DF`), una consulta es funcional: se envía a cada ECU
+del bus y se imprimen todas las respuestas. `ATSH 7E1` la dirige a una sola
+ECU, y un dígito final (`010C1`) corta tras esa cantidad de ECUs. La espera por
+ECU es `Elm327Emulator(timeout=0.2)`, el valor por defecto de `ATST`; si no hay
+respuesta, se espera sin bloquear al resto de clientes. Un error ISO-TP se
+informa como `CAN ERROR`.
+
+Las respuestas siguen el formato de un adaptador real con CAN 11 bits: con
+`ATH1` cada frame va en su línea con cabecera y byte PCI (`7E8 04 41 0C 0D 48`);
+sin cabeceras, una respuesta de varios frames se imprime como `014` y luego
+`0: …`, `1: …`. `ATS0/ATS1` quita o pone los espacios. `ATSP`/`ATDP`/`ATDPN`
+fijan e informan el protocolo (el bus simulado es siempre
+`ISO 15765-4 (CAN 11/500)`), `ATRV` devuelve `12.6V`, y `ATL`, `ATST`, `ATAT`,
+`ATM`, `ATCAF`, `ATAL` y `ATNL` se aceptan sin efecto. Se prueba con
+[python-OBD](https://github.com/brendan-w/python-OBD) como cliente real.
+
+`TcpServer` atiende hasta 16 clientes simultáneos (`max_clients`) y corta las
+líneas de más de 1024 bytes.
 
 `VehicleShell(vehicle).execute("set ECM.rpm 3500")` interpreta los comandos de
 `help`. `ecusdk run` lo sirve por TCP en `--control-port` (35001; `0` lo
 desactiva), y `ecusdk get/set/dtc/fault/faults/inspect/shell` se conectan a él.
+El shell no tiene autenticación: escucha en `--control-host` (por defecto
+`127.0.0.1`) aunque `--host` abra el ELM327 a la red.

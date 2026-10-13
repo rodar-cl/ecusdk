@@ -2,6 +2,25 @@
 
 ## Unreleased
 
+- Seguridad: el shell de control escucha en su propio `--control-host`
+  (por defecto `127.0.0.1`) y ya no sigue a `--host`; antes, abrir el ELM327 a
+  la red (opción de red del TUI) exponía también el shell, sin autenticación.
+- `TcpServer` limita los clientes simultáneos (`max_clients=16`) y
+  `serve_lines` corta las líneas de más de 1024 bytes; antes un cliente podía
+  agotar memoria e hilos. Nuevo `TcpServer.bind()`.
+- `ecusdk run` falla con código 1 si el puerto ELM327 o el de control está
+  ocupado, en vez de seguir sin shell de control; informa el puerto real.
+- Una consulta sin respuesta ya no retiene el lock del vehículo durante la
+  espera tipo `ATST`: un escáner que recorre PIDs no congela la simulación.
+- El tap pasivo de `VirtualCanBus` retiene como máximo `TAP_LIMIT` (4096)
+  frames; antes crecía sin límite durante toda la simulación.
+- **Incompatible (ELM327):** formato de adaptador real. Con `ATH1` se incluye
+  el byte PCI (`7E8 04 41 0C 0D 48`) y cada frame va en su línea; sin
+  cabeceras, las respuestas de varios frames usan `014` / `0: …` / `1: …`.
+- ELM327: `ATSH7DF` es funcional, dígito final de cantidad de respuestas
+  (`010C1`), `ATDPN`, `ATRV`, nombres de protocolo en `ATDP` y `ATSP` valida
+  el protocolo. OBD Mode 09 PID 00 (PIDs soportados) cuando hay VIN.
+  python-OBD ahora conecta y lee RPM, VIN y DTCs (`tests/test_python_obd.py`).
 - **Incompatible:** los dos bits altos de un DTC siguen SAE J2012: `01` es
   chasis (C) y `10` carrocería (B). Antes estaban invertidos, de modo que
   `C0123` se enviaba como `B0123`; los códigos P y U no cambian.

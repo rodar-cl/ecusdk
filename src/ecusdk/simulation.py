@@ -226,6 +226,9 @@ class ECU:
         if mode == 0x04:
             self.dtcs.clear()
             return bytes((0x44,))
+        if mode == 0x09 and pid == 0x00 and self.vin:
+            # PIDs soportados del modo 09: sólo 02 (VIN).
+            return bytes((0x49, 0x00, 0x40, 0x00, 0x00, 0x00))
         if mode == 0x09 and pid == 0x02:
             if len(self.vin) != 17:
                 raise ValueError("el VIN debe contener 17 caracteres")
@@ -791,7 +794,14 @@ class Vehicle:
             raise ValueError("timeout debe ser finito y no negativo")
         # A virtual bus is shared state; serialize request/response transactions.
         with self._exchange_lock:
-            return self._exchange_frames(bus_name, request, timeout)
+            deadline = self.clock.now() + timeout
+            responses = self._exchange_frames(bus_name, request, timeout)
+        # Sin respuesta ni frames retrasados no llegará nada más: el resto de
+        # la espera (tipo ATST) ocurre sin el lock para no bloquear a otros.
+        remaining = deadline - self.clock.now()
+        if not responses and remaining > 0:
+            self.clock.sleep(remaining)
+        return responses
 
     def _exchange_frames(
         self, bus_name: str, request: CanFrame, timeout: float
@@ -877,7 +887,7 @@ class Vehicle:
                     return result
                 for control in controls:
                     driver.send(control)
-                waiting = not result or client.receiver.receiving
+                waiting = (not result and self._delayed) or client.receiver.receiving
                 if not controls and not (waiting and self._wait(deadline)):
                     return result
                 self.tick()

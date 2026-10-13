@@ -38,7 +38,7 @@ def test_tcp_session_reset_unknown_command_vin_and_dtcs() -> None:
 
             # La sesión sigue usable tras un comando desconocido: VIN y DTCs.
             assert "OK" in command("ATE0")
-            assert "45 43 55 53 44 4B" in command("0902")
+            assert "0: 49 02 01 45 43 55\r1: 53 44 4B" in command("0902")
             assert command("03").startswith("43 01 03 02")
     finally:
         server.close()
