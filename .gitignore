@@ -18,3 +18,4 @@ build/
 
 # Grabaciones de sesiones (ecusdk run --record, ecusdk tui)
 *.eculog
+.hypothesis/
